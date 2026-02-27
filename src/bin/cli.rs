@@ -2,7 +2,7 @@ use clap::{Parser, Subcommand};
 use pr_tracker_rust::db::DatabaseRepository;
 use pr_tracker_rust::github::GitHubClient;
 use pr_tracker_rust::models::User;
-use pr_tracker_rust::sync::{SyncRunSummary, sync_all_tracked};
+use pr_tracker_rust::sync::{sync_all_tracked, SyncRunSummary};
 
 #[derive(Debug, Parser)]
 #[command(name = "pr-tracker-cli")]
@@ -181,7 +181,7 @@ fn notify_sync_changes(summary: &SyncRunSummary) -> anyhow::Result<()> {
     let changed = summary.new_prs + summary.updated_prs;
 
     if changed == 0 {
-        return Ok(())
+        return Ok(());
     }
 
     let body = format!(

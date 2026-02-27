@@ -163,7 +163,6 @@ impl GitHubClient {
     where
         T: DeserializeOwned,
     {
-        eprintln!("[github] GET {url}");
         let response = self.http.get(url).send().await?;
         let status = response.status();
         let link_header = response

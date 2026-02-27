@@ -8,14 +8,19 @@ use crossterm::terminal::{
 };
 use crossterm::ExecutableCommand;
 use pr_tracker_rust::db::DatabaseRepository;
-use pr_tracker_rust::models::CiStatus;
-use pr_tracker_rust::models::PullRequest;
+use pr_tracker_rust::github::GitHubClient;
+use pr_tracker_rust::models::{CiStatus, PullRequest};
+use pr_tracker_rust::sync::{
+    refresh_existing_pull_requests_with_progress, sync_all_tracked_with_progress,
+    QuickRefreshSummary, SyncRunSummary,
+};
 use ratatui::backend::CrosstermBackend;
 use ratatui::layout::{Constraint, Direction, Layout};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, List, ListItem, ListState, Paragraph};
 use ratatui::Terminal;
+use tokio::sync::mpsc;
 
 struct Model {
     prs: Vec<PullRequest>,
@@ -27,6 +32,18 @@ struct Model {
 enum ViewMode {
     Active,
     Acknowledged,
+}
+
+#[derive(Clone, Copy)]
+enum BackgroundJob {
+    FullSync,
+    QuickRefresh,
+}
+
+enum BackgroundMessage {
+    Progress,
+    FullSyncFinished(anyhow::Result<SyncRunSummary>),
+    QuickRefreshFinished(anyhow::Result<QuickRefreshSummary>),
 }
 
 impl Model {
@@ -48,7 +65,11 @@ impl Model {
                     ViewMode::Acknowledged => pr.is_acknowledged(),
                 };
 
-                if include { Some(index) } else { None }
+                if include {
+                    Some(index)
+                } else {
+                    None
+                }
             })
             .collect()
     }
@@ -105,8 +126,41 @@ async fn run_tui(mut model: Model, repo: &DatabaseRepository) -> anyhow::Result<
     let mut terminal = Terminal::new(backend)?;
 
     let mut should_quit = false;
+    let mut spinner_tick = 0usize;
+    let mut active_job: Option<BackgroundJob> = None;
+    let (tx, mut rx) = mpsc::unbounded_channel::<BackgroundMessage>();
+
     while !should_quit {
-        terminal.draw(|frame| draw(frame, &model))?;
+        while let Ok(message) = rx.try_recv() {
+            match message {
+                BackgroundMessage::Progress => {}
+                BackgroundMessage::FullSyncFinished(result) => {
+                    active_job = None;
+                    spinner_tick = 0;
+
+                    let _ = result;
+
+                    model.prs = repo.get_all_prs().await?;
+                    let filtered_indices = model.filtered_indices();
+                    model.ensure_cursor_in_range(filtered_indices.len());
+                }
+                BackgroundMessage::QuickRefreshFinished(result) => {
+                    active_job = None;
+                    spinner_tick = 0;
+
+                    let _ = result;
+
+                    model.prs = repo.get_all_prs().await?;
+                    let filtered_indices = model.filtered_indices();
+                    model.ensure_cursor_in_range(filtered_indices.len());
+                }
+            }
+        }
+
+        terminal.draw(|frame| draw(frame, &model, active_job, spinner_tick))?;
+        if active_job.is_some() {
+            spinner_tick = spinner_tick.wrapping_add(1);
+        }
 
         if event::poll(Duration::from_millis(200))? {
             if let Event::Key(key) = event::read()? {
@@ -152,6 +206,22 @@ async fn run_tui(mut model: Model, repo: &DatabaseRepository) -> anyhow::Result<
                         let filtered_indices = model.filtered_indices();
                         model.ensure_cursor_in_range(filtered_indices.len());
                     }
+                    KeyCode::Char('s') => {
+                        if active_job.is_some() {
+                            continue;
+                        }
+
+                        active_job = Some(BackgroundJob::FullSync);
+                        spawn_full_sync(repo.clone(), tx.clone());
+                    }
+                    KeyCode::Char('r') => {
+                        if active_job.is_some() {
+                            continue;
+                        }
+
+                        active_job = Some(BackgroundJob::QuickRefresh);
+                        spawn_quick_refresh(repo.clone(), tx.clone());
+                    }
                     _ => {}
                 }
             }
@@ -163,7 +233,12 @@ async fn run_tui(mut model: Model, repo: &DatabaseRepository) -> anyhow::Result<
     Ok(())
 }
 
-fn draw(frame: &mut ratatui::Frame<'_>, model: &Model) {
+fn draw(
+    frame: &mut ratatui::Frame<'_>,
+    model: &Model,
+    active_job: Option<BackgroundJob>,
+    spinner_tick: usize,
+) {
     let filtered_indices = model.filtered_indices();
     let selected = model
         .selected_index(&filtered_indices)
@@ -273,11 +348,79 @@ fn draw(frame: &mut ratatui::Frame<'_>, model: &Model) {
     }
     frame.render_stateful_widget(list, chunks[1], &mut state);
 
-    let footer = Paragraph::new(
-        "j/k or arrows: move  |  enter/space: open PR  |  a: acknowledge  |  v: toggle view  |  q: quit",
-    )
+    let spinner = match active_job {
+        Some(job) => format!(
+            "  |  {} {}",
+            background_job_label(job),
+            spinner_frame(spinner_tick)
+        ),
+        None => String::new(),
+    };
+
+    let footer = Paragraph::new(format!(
+        "j/k or arrows: move  |  enter/space: open PR  |  a: acknowledge  |  v: toggle view  |  s: full sync  |  r: quick refresh  |  q: quit{}",
+        spinner
+    ))
     .block(Block::default().borders(Borders::TOP));
     frame.render_widget(footer, chunks[2]);
+}
+
+fn spawn_full_sync(repo: DatabaseRepository, tx: mpsc::UnboundedSender<BackgroundMessage>) {
+    tokio::spawn(async move {
+        let progress_tx = tx.clone();
+        let result = run_full_sync(repo, progress_tx).await;
+        let _ = tx.send(BackgroundMessage::FullSyncFinished(result));
+    });
+}
+
+fn spawn_quick_refresh(repo: DatabaseRepository, tx: mpsc::UnboundedSender<BackgroundMessage>) {
+    tokio::spawn(async move {
+        let progress_tx = tx.clone();
+        let result = run_quick_refresh(repo, progress_tx).await;
+        let _ = tx.send(BackgroundMessage::QuickRefreshFinished(result));
+    });
+}
+
+async fn run_full_sync(
+    repo: DatabaseRepository,
+    tx: mpsc::UnboundedSender<BackgroundMessage>,
+) -> anyhow::Result<SyncRunSummary> {
+    let user = repo.get_user().await?.ok_or_else(|| {
+        anyhow::anyhow!("no authenticated user found, run 'cli auth <token>' first")
+    })?;
+    let github = GitHubClient::new(user.access_token)?;
+
+    sync_all_tracked_with_progress(&repo, &github, |_| {
+        let _ = tx.send(BackgroundMessage::Progress);
+    })
+    .await
+}
+
+async fn run_quick_refresh(
+    repo: DatabaseRepository,
+    tx: mpsc::UnboundedSender<BackgroundMessage>,
+) -> anyhow::Result<QuickRefreshSummary> {
+    let user = repo.get_user().await?.ok_or_else(|| {
+        anyhow::anyhow!("no authenticated user found, run 'cli auth <token>' first")
+    })?;
+    let github = GitHubClient::new(user.access_token)?;
+
+    refresh_existing_pull_requests_with_progress(&repo, &github, |_| {
+        let _ = tx.send(BackgroundMessage::Progress);
+    })
+    .await
+}
+
+fn background_job_label(job: BackgroundJob) -> &'static str {
+    match job {
+        BackgroundJob::FullSync => "sync",
+        BackgroundJob::QuickRefresh => "refresh",
+    }
+}
+
+fn spinner_frame(tick: usize) -> char {
+    const FRAMES: [char; 4] = ['|', '/', '-', '\\'];
+    FRAMES[tick % FRAMES.len()]
 }
 
 fn title_case(value: &str) -> String {

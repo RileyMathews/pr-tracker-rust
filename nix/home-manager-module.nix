@@ -14,8 +14,8 @@ in
 
     package = lib.mkOption {
       type = lib.types.package;
-      default = self.packages.${pkgs.system}.cli-tui;
-      defaultText = lib.literalExpression "self.packages.${pkgs.system}.cli-tui";
+      default = self.packages.${pkgs.stdenv.hostPlatform.system}.cli-tui;
+      defaultText = lib.literalExpression "self.packages.\${pkgs.stdenv.hostPlatform.system}.cli-tui";
       description = "Package providing the prt binary.";
     };
 

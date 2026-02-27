@@ -144,6 +144,42 @@ impl GitHubClient {
         })
     }
 
+    pub async fn fetch_user_teams(&self) -> anyhow::Result<Vec<schema::UserTeam>> {
+        let url = format!("{BASE_URL}/user/teams?per_page={PER_PAGE}&page=1");
+        self.get_paginated(&url).await.map_err(|err| {
+            if err.to_string().contains("status=403") {
+                anyhow::anyhow!(
+                    "failed to fetch GitHub teams: token likely lacks 'read:org' scope. \
+                     Regenerate your token with 'read:org' permission and run 'prt auth' again.\n\
+                     Original error: {err}"
+                )
+            } else {
+                err
+            }
+        })
+    }
+
+    pub async fn fetch_team_members(
+        &self,
+        org: &str,
+        team_slug: &str,
+    ) -> anyhow::Result<Vec<schema::TeamMember>> {
+        let url = format!(
+            "{BASE_URL}/orgs/{org}/teams/{team_slug}/members?per_page={PER_PAGE}&page=1"
+        );
+        self.get_paginated(&url).await.map_err(|err| {
+            if err.to_string().contains("status=403") {
+                anyhow::anyhow!(
+                    "failed to fetch members for team '{team_slug}' in org '{org}': \
+                     token likely lacks 'read:org' scope.\n\
+                     Original error: {err}"
+                )
+            } else {
+                err
+            }
+        })
+    }
+
     async fn get_paginated<T>(&self, first_url: &str) -> anyhow::Result<Vec<T>>
     where
         T: DeserializeOwned,

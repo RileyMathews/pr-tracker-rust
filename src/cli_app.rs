@@ -1,3 +1,6 @@
+use std::collections::HashSet;
+use std::io::IsTerminal;
+
 use clap::{Parser, Subcommand};
 
 use crate::db::DatabaseRepository;
@@ -34,6 +37,7 @@ enum AuthorCommand {
     List,
     Add { login: String },
     Remove { login: String },
+    FromTeams,
 }
 
 #[derive(Debug, Subcommand)]
@@ -110,8 +114,88 @@ async fn handle_authors(repo: &DatabaseRepository, command: AuthorCommand) -> an
             repo.delete_tracked_author(&login).await?;
             println!("Author '{}' removed successfully", login);
         }
+        AuthorCommand::FromTeams => {
+            handle_authors_from_teams(repo).await?;
+        }
     }
 
+    Ok(())
+}
+
+async fn handle_authors_from_teams(repo: &DatabaseRepository) -> anyhow::Result<()> {
+    let user = repo.get_user().await?.ok_or_else(|| {
+        anyhow::anyhow!("no authenticated user found, run 'prt auth <token>' first")
+    })?;
+
+    let github = GitHubClient::new(user.access_token.clone())?;
+
+    eprintln!("Fetching team members...");
+
+    let teams = github.fetch_user_teams().await?;
+    if teams.is_empty() {
+        println!("You are not a member of any GitHub teams.");
+        return Ok(());
+    }
+
+    let mut seen_logins: HashSet<String> = HashSet::new();
+    let mut all_members: Vec<String> = Vec::new();
+
+    for team in &teams {
+        let members = github
+            .fetch_team_members(&team.organization.login, &team.slug)
+            .await?;
+        for member in members {
+            if seen_logins.insert(member.login.clone()) {
+                all_members.push(member.login);
+            }
+        }
+    }
+
+    let current_login_lower = user.username.to_lowercase();
+    let tracked_lower: HashSet<String> = repo
+        .get_tracked_authors()
+        .await?
+        .into_iter()
+        .map(|s| s.to_lowercase())
+        .collect();
+
+    let candidates: Vec<String> = all_members
+        .into_iter()
+        .filter(|login| {
+            let lower = login.to_lowercase();
+            lower != current_login_lower && !tracked_lower.contains(&lower)
+        })
+        .collect();
+
+    if candidates.is_empty() {
+        println!("All team members are already being tracked.");
+        return Ok(());
+    }
+
+    if !std::io::stderr().is_terminal() {
+        anyhow::bail!(
+            "interactive selection requires a TTY; run this command in an interactive terminal"
+        );
+    }
+
+    let selections = dialoguer::MultiSelect::new()
+        .with_prompt("Select authors to track (space to toggle, enter to confirm)")
+        .items(&candidates)
+        .interact()?;
+
+    if selections.is_empty() {
+        println!("No authors selected.");
+        return Ok(());
+    }
+
+    let count = selections.len();
+    let selected_logins: Vec<String> = selections
+        .into_iter()
+        .map(|idx| candidates[idx].clone())
+        .collect();
+    repo.save_tracked_authors_batch(&selected_logins).await?;
+
+    println!("Saved {} author(s).", count);
     Ok(())
 }
 

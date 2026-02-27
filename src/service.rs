@@ -29,12 +29,13 @@ pub async fn fetch_pull_request_details(
         title: pull_request.title.clone(),
         repository: repo_name.to_string(),
         author: pull_request.user.login.clone(),
+        head_sha: ci_statuses.head_sha.clone(),
         draft: pull_request.draft,
         created_at,
         updated_at,
         ci_status: map_ci_status(&ci_statuses),
         last_comment_at: latest_comment_time(&pr_details),
-        last_commit_at: latest_commit_activity_time(&ci_statuses),
+        last_commit_at: DateTime::UNIX_EPOCH,
         last_ci_status_update_at: DateTime::UNIX_EPOCH,
         last_acknowledged_at: None,
         requested_reviewers,
@@ -85,28 +86,6 @@ fn latest_comment_time(pr_details: &schema::PullRequestDetails) -> DateTime<Utc>
 
     issue_latest
         .chain(review_latest)
-        .max()
-        .unwrap_or(DateTime::UNIX_EPOCH)
-}
-
-fn latest_commit_activity_time(ci_statuses: &schema::PullRequestCiStatuses) -> DateTime<Utc> {
-    let check_run_latest = ci_statuses.check_runs.iter().flat_map(|check_run| {
-        [
-            parse_optional_timestamp(check_run.completed_at.as_deref()),
-            parse_optional_timestamp(check_run.started_at.as_deref()),
-        ]
-    });
-
-    let status_latest = ci_statuses.statuses.iter().flat_map(|status| {
-        [
-            parse_optional_timestamp(status.updated_at.as_deref()),
-            parse_optional_timestamp(status.created_at.as_deref()),
-        ]
-    });
-
-    check_run_latest
-        .chain(status_latest)
-        .flatten()
         .max()
         .unwrap_or(DateTime::UNIX_EPOCH)
 }

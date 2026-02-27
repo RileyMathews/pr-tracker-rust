@@ -30,14 +30,15 @@ impl DatabaseRepository {
         sqlx::query(
             r#"
             INSERT INTO pull_requests (
-              number, title, repository, author, draft, created_at_unix,
+              number, title, repository, author, head_sha, draft, created_at_unix,
               updated_at_unix, ci_status, last_comment_unix, last_commit_unix,
               last_ci_status_update_unix, last_acknowledged_unix, requested_reviewers
-            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)
             ON CONFLICT(repository, number) DO UPDATE SET
               title = excluded.title,
               repository = excluded.repository,
               author = excluded.author,
+              head_sha = excluded.head_sha,
               draft = excluded.draft,
               updated_at_unix = excluded.updated_at_unix,
               ci_status = excluded.ci_status,
@@ -52,6 +53,7 @@ impl DatabaseRepository {
         .bind(&pr.title)
         .bind(&pr.repository)
         .bind(&pr.author)
+        .bind(&pr.head_sha)
         .bind(pr.draft)
         .bind(pr.created_at.timestamp())
         .bind(pr.updated_at.timestamp())
@@ -79,7 +81,7 @@ impl DatabaseRepository {
     pub async fn get_prs_by_repository(&self, repo_name: &str) -> anyhow::Result<Vec<PullRequest>> {
         let rows = sqlx::query_as::<_, PullRequestRow>(
             r#"
-            SELECT number, title, repository, author, draft, created_at_unix,
+            SELECT number, title, repository, author, head_sha, draft, created_at_unix,
                    updated_at_unix, ci_status, last_comment_unix, last_commit_unix,
                    last_ci_status_update_unix, last_acknowledged_unix, requested_reviewers
             FROM pull_requests
@@ -96,7 +98,7 @@ impl DatabaseRepository {
     pub async fn get_all_prs(&self) -> anyhow::Result<Vec<PullRequest>> {
         let rows = sqlx::query_as::<_, PullRequestRow>(
             r#"
-            SELECT number, title, repository, author, draft, created_at_unix,
+            SELECT number, title, repository, author, head_sha, draft, created_at_unix,
                    updated_at_unix, ci_status, last_comment_unix, last_commit_unix,
                    last_ci_status_update_unix, last_acknowledged_unix, requested_reviewers
             FROM pull_requests
@@ -139,7 +141,7 @@ impl DatabaseRepository {
     ) -> anyhow::Result<Option<PullRequest>> {
         let row = sqlx::query_as::<_, PullRequestRow>(
             r#"
-            SELECT number, title, repository, author, draft, created_at_unix,
+            SELECT number, title, repository, author, head_sha, draft, created_at_unix,
                    updated_at_unix, ci_status, last_comment_unix, last_commit_unix,
                    last_ci_status_update_unix, last_acknowledged_unix, requested_reviewers
             FROM pull_requests
@@ -214,6 +216,7 @@ struct PullRequestRow {
     title: String,
     repository: String,
     author: String,
+    head_sha: String,
     draft: bool,
     created_at_unix: i64,
     updated_at_unix: i64,
@@ -235,6 +238,7 @@ impl PullRequestRow {
             title: self.title,
             repository: self.repository,
             author: self.author,
+            head_sha: self.head_sha,
             draft: self.draft,
             created_at: unix_to_datetime(self.created_at_unix)?,
             updated_at: unix_to_datetime(self.updated_at_unix)?,

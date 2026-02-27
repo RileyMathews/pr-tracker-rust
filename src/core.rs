@@ -61,11 +61,11 @@ fn pull_request_has_relevant_changes(
 ) -> (bool, bool) {
     let ci_status_changed = existing_pr.ci_status != incoming_pr.ci_status;
     let last_comment_changed = existing_pr.last_comment_at != incoming_pr.last_comment_at;
-    let last_commit_changed = existing_pr.last_commit_at != incoming_pr.last_commit_at;
+    let head_sha_changed = existing_pr.head_sha != incoming_pr.head_sha;
 
     (
         ci_status_changed,
-        ci_status_changed || last_comment_changed || last_commit_changed,
+        ci_status_changed || last_comment_changed || head_sha_changed,
     )
 }
 
@@ -76,6 +76,11 @@ fn apply_sync_metadata(
     now: DateTime<Utc>,
 ) {
     incoming_pr.last_acknowledged_at = existing_pr.last_acknowledged_at;
+    incoming_pr.last_commit_at = if existing_pr.head_sha != incoming_pr.head_sha {
+        now
+    } else {
+        existing_pr.last_commit_at
+    };
     incoming_pr.last_ci_status_update_at = if ci_status_changed {
         now
     } else {
@@ -118,6 +123,7 @@ mod tests {
             title: String::new(),
             repository: repo.to_string(),
             author: String::new(),
+            head_sha: String::new(),
             draft: false,
             created_at: DateTime::UNIX_EPOCH,
             updated_at: DateTime::UNIX_EPOCH,
@@ -187,6 +193,7 @@ mod tests {
             ci_status: CiStatus::Pending,
             last_comment_at: base,
             last_commit_at: base,
+            head_sha: "sha-1".to_string(),
             ..empty_pr("org/repo", 2)
         };
         let db3 = PullRequest {
@@ -217,7 +224,7 @@ mod tests {
         let fresh2 = PullRequest {
             ci_status: CiStatus::Pending,
             last_comment_at: base,
-            last_commit_at: later,
+            head_sha: "sha-2".to_string(),
             ..empty_pr("org/repo", 2)
         };
         let fresh3 = PullRequest {
@@ -257,5 +264,25 @@ mod tests {
 
         assert_eq!(result.removed_prs.len(), 1);
         assert_eq!(result.removed_prs[0].number, 6);
+    }
+
+    #[test]
+    fn updates_last_commit_when_head_sha_changes() {
+        let before = dt(2025, 1, 1, 0);
+        let now = dt(2025, 1, 1, 2);
+
+        let db_pr = PullRequest {
+            head_sha: "old-sha".to_string(),
+            last_commit_at: before,
+            ..empty_pr("acme/repo", 1)
+        };
+        let fresh_pr = PullRequest {
+            head_sha: "new-sha".to_string(),
+            ..empty_pr("acme/repo", 1)
+        };
+
+        let result = process_pull_request_sync_results(&[db_pr], &[fresh_pr], now);
+        assert_eq!(result.updated_prs.len(), 1);
+        assert_eq!(result.updated_prs[0].last_commit_at, now);
     }
 }

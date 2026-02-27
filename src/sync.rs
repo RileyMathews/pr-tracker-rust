@@ -171,6 +171,11 @@ where
         match refreshed_result {
             Ok(mut refreshed_pr) => {
                 refreshed_pr.last_acknowledged_at = existing_pr.last_acknowledged_at;
+                refreshed_pr.last_commit_at = if existing_pr.head_sha != refreshed_pr.head_sha {
+                    Utc::now()
+                } else {
+                    existing_pr.last_commit_at
+                };
                 refreshed_pr.last_ci_status_update_at =
                     if existing_pr.ci_status != refreshed_pr.ci_status {
                         Utc::now()

@@ -31,6 +31,7 @@ pub struct PullRequest {
     pub title: String,
     pub repository: String,
     pub author: String,
+    pub head_sha: String,
     pub draft: bool,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,

@@ -32,7 +32,7 @@ rustPlatform.buildRustPackage {
     description = "Track pull requests across repositories";
     homepage = "https://github.com/rileytwo/pr-tracker-rust";
     license = lib.licenses.mit;
-    mainProgram = "cli";
+    mainProgram = "prt";
     platforms = lib.platforms.all;
   };
 }

@@ -16,7 +16,7 @@ in
       type = lib.types.package;
       default = self.packages.${pkgs.system}.cli-tui;
       defaultText = lib.literalExpression "self.packages.${pkgs.system}.cli-tui";
-      description = "Package providing the pr-tracker CLI and TUI binaries.";
+      description = "Package providing the prt binary.";
     };
 
     dataDir = lib.mkOption {
@@ -53,7 +53,7 @@ in
         Type = "oneshot";
         Environment = [ "PR_TRACKER_DB=sqlite://${cfg.dataDir}/db.sqlite3" ] ++ lib.mapAttrsToList (name: value: "${name}=${value}") cfg.extraEnvironment;
         ExecStartPre = "${pkgs.coreutils}/bin/mkdir -p ${cfg.dataDir}";
-        ExecStart = "${cfg.package}/bin/cli sync";
+        ExecStart = "${cfg.package}/bin/prt sync";
       };
     };
 

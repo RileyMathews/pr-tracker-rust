@@ -12,6 +12,7 @@ const PER_PAGE: i64 = 100;
 pub struct GitHubClient {
     http: reqwest::Client,
     auth_token: String,
+    log_requests: bool,
 }
 
 impl GitHubClient {
@@ -39,7 +40,16 @@ impl GitHubClient {
         let http = reqwest::Client::builder()
             .default_headers(headers)
             .build()?;
-        Ok(Self { http, auth_token })
+        Ok(Self {
+            http,
+            auth_token,
+            log_requests: false,
+        })
+    }
+
+    pub fn with_request_logging(mut self, log_requests: bool) -> Self {
+        self.log_requests = log_requests;
+        self
     }
 
     pub async fn fetch_authenticated_user(&self) -> anyhow::Result<schema::User> {
@@ -163,6 +173,9 @@ impl GitHubClient {
     where
         T: DeserializeOwned,
     {
+        if self.log_requests {
+            eprintln!("[github] GET {url}");
+        }
         let response = self.http.get(url).send().await?;
         let status = response.status();
         let link_header = response

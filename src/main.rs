@@ -1,3 +1,3 @@
 fn main() {
-    println!("Use one of the binaries: cli, tui, daemon, debug");
+    println!("Use one of the binaries: prt, daemon, debug");
 }

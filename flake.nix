@@ -31,10 +31,7 @@
         {
           default = self.packages.${system}.cli-tui;
           cli-tui = pkgs.callPackage ./nix/package.nix {
-            binaryTargets = [
-              "cli"
-              "tui"
-            ];
+            binaryTargets = [ "prt" ];
           };
           all-binaries = pkgs.callPackage ./nix/package.nix { };
         }

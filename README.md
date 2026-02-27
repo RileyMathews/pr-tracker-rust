@@ -4,18 +4,18 @@ Rust port of the original Go PR tracker.
 
 ## Binaries
 
-- `cargo run --bin cli -- <command>`
-- `cargo run --bin tui`
+- `cargo run --bin prt` (launches TUI)
+- `cargo run --bin prt -- <command>` (runs CLI command)
 - `cargo run --bin daemon`
 - `cargo run --bin debug`
 
 ## CLI commands
 
-- `auth <github-token>`
-- `authors list|add <login>|remove <login>`
-- `repositories list|add <owner/repo>|remove <owner/repo>`
-- `sync`
-- `prs`
+- `prt auth <github-token>`
+- `prt authors list|add <login>|remove <login>`
+- `prt repositories list|add <owner/repo>|remove <owner/repo>`
+- `prt sync`
+- `prt prs`
 
 ## Environment
 
@@ -26,7 +26,7 @@ Rust port of the original Go PR tracker.
 
 This repository is a flake that exposes:
 
-- `packages.<system>.cli-tui` (builds only `cli` and `tui`)
+- `packages.<system>.cli-tui` (builds `prt`)
 - `packages.<system>.all-binaries` (builds all binaries)
 - `homeManagerModules.default`
 
@@ -56,6 +56,28 @@ This repository is a flake that exposes:
 
 Enabling `services.pr-tracker-sync` will:
 
-- install the `cli`/`tui` package in `home.packages`
-- create a user `systemd` service that runs `cli sync`
+- install the `prt` package in `home.packages`
+- create a user `systemd` service that runs `prt sync`
 - create a user `systemd` timer that triggers every 5 minutes by default
+
+### Running CLI/TUI after module install
+
+After Home Manager installs the module/package, the binary is available on your `PATH` as:
+
+- `prt`
+
+If you are using the module-managed data directory, point interactive commands at the same DB:
+
+```bash
+export PR_TRACKER_DB="sqlite://${XDG_DATA_HOME:-$HOME/.local/share}/pr-tracker-rust/db.sqlite3"
+```
+
+Then run:
+
+```bash
+prt auth <github-token>
+prt authors add <login>
+prt repositories add <owner/repo>
+prt sync
+prt
+```

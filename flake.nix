@@ -37,6 +37,31 @@
         }
       );
 
+      devShells = forAllSystems (
+        system:
+        let
+          pkgs = import nixpkgs { inherit system; };
+        in
+        {
+          default = pkgs.mkShell {
+            nativeBuildInputs = [ pkgs.pkg-config ];
+            buildInputs =
+              [
+                pkgs.rustc
+                pkgs.cargo
+                pkgs.clippy
+                pkgs.rustfmt
+                pkgs.rust-analyzer
+                pkgs.openssl
+                pkgs.sqlite
+              ]
+              ++ pkgs.lib.optionals pkgs.stdenv.isDarwin [
+                pkgs.darwin.apple_sdk.frameworks.Security
+              ];
+          };
+        }
+      );
+
       homeManagerModules.default = import ./nix/home-manager-module.nix self;
     };
 }

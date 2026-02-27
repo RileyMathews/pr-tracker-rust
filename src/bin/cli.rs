@@ -2,7 +2,7 @@ use clap::{Parser, Subcommand};
 use pr_tracker_rust::db::DatabaseRepository;
 use pr_tracker_rust::github::GitHubClient;
 use pr_tracker_rust::models::User;
-use pr_tracker_rust::sync::sync_all_tracked;
+use pr_tracker_rust::sync::{SyncRunSummary, sync_all_tracked};
 
 #[derive(Debug, Parser)]
 #[command(name = "pr-tracker-cli")]
@@ -155,6 +155,8 @@ async fn handle_sync(repo: &DatabaseRepository) -> anyhow::Result<()> {
     let github = GitHubClient::new(user.access_token)?;
     let summary = sync_all_tracked(repo, &github).await?;
 
+    let _ = notify_sync_changes(&summary);
+
     println!(
         "Sync complete: repos={} new={} updated={} deleted={}",
         summary.synced_repositories, summary.new_prs, summary.updated_prs, summary.deleted_prs
@@ -170,6 +172,30 @@ async fn handle_prs(repo: &DatabaseRepository) -> anyhow::Result<()> {
             "- #{}: {} (Repository: {}, Author: {})",
             pr.number, pr.title, pr.repository, pr.author
         );
+    }
+
+    Ok(())
+}
+
+fn notify_sync_changes(summary: &SyncRunSummary) -> anyhow::Result<()> {
+    let changed = summary.new_prs + summary.updated_prs;
+
+    if changed == 0 {
+        return Ok(())
+    }
+
+    let body = format!(
+        "{} new, {} updated PRs",
+        summary.new_prs, summary.updated_prs
+    );
+
+    #[cfg(target_os = "linux")]
+    {
+        notify_rust::Notification::new()
+            .summary("PR Tracker")
+            .body(&body)
+            .appname("pr-tracker")
+            .show()?;
     }
 
     Ok(())

@@ -92,7 +92,7 @@ impl DatabaseRepository {
         .fetch_all(&self.pool)
         .await?;
 
-        rows.into_iter().map(PullRequestRow::to_model).collect()
+        rows.into_iter().map(PullRequestRow::into_model).collect()
     }
 
     pub async fn get_all_prs(&self) -> anyhow::Result<Vec<PullRequest>> {
@@ -107,7 +107,7 @@ impl DatabaseRepository {
         .fetch_all(&self.pool)
         .await?;
 
-        rows.into_iter().map(PullRequestRow::to_model).collect()
+        rows.into_iter().map(PullRequestRow::into_model).collect()
     }
 
     pub async fn get_user(&self) -> anyhow::Result<Option<User>> {
@@ -154,7 +154,7 @@ impl DatabaseRepository {
         .fetch_optional(&self.pool)
         .await?;
 
-        row.map(PullRequestRow::to_model).transpose()
+        row.map(PullRequestRow::into_model).transpose()
     }
 
     pub async fn get_tracked_authors(&self) -> anyhow::Result<Vec<String>> {
@@ -229,7 +229,7 @@ struct PullRequestRow {
 }
 
 impl PullRequestRow {
-    fn to_model(self) -> anyhow::Result<PullRequest> {
+    fn into_model(self) -> anyhow::Result<PullRequest> {
         let requested_reviewers: Vec<String> = serde_json::from_str(&self.requested_reviewers)
             .map_err(|err| anyhow::anyhow!("unmarshal requested_reviewers: {err}"))?;
 

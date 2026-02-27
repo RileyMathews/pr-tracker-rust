@@ -11,8 +11,7 @@ async fn main() -> anyhow::Result<()> {
         .and_then(|raw| raw.parse().ok())
         .unwrap_or(60);
 
-    let db_path =
-        std::env::var("PR_TRACKER_DB").unwrap_or_else(|_| "sqlite://./db.sqlite3".to_string());
+    let db_path = pr_tracker_rust::default_db_path();
     let repo = DatabaseRepository::connect(&db_path).await?;
     repo.apply_migrations().await?;
 

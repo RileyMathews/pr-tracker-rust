@@ -107,8 +107,7 @@ impl Model {
 }
 
 pub async fn run() -> anyhow::Result<()> {
-    let db_path =
-        std::env::var("PR_TRACKER_DB").unwrap_or_else(|_| "sqlite://./db.sqlite3".to_string());
+    let db_path = crate::default_db_path();
     let repo = DatabaseRepository::connect(&db_path).await?;
     repo.apply_migrations().await?;
 

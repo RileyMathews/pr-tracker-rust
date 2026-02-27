@@ -66,8 +66,7 @@ async fn run_command(command: Command, repo: &DatabaseRepository) -> anyhow::Res
 }
 
 async fn open_repository() -> anyhow::Result<DatabaseRepository> {
-    let db_path =
-        std::env::var("PR_TRACKER_DB").unwrap_or_else(|_| "sqlite://./db.sqlite3".to_string());
+    let db_path = crate::default_db_path();
     let repo = DatabaseRepository::connect(&db_path).await?;
     repo.apply_migrations().await?;
     Ok(repo)

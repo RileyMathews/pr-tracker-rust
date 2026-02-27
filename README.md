@@ -34,7 +34,7 @@ This repository is a flake that exposes:
 
 ```nix
 {
-  inputs.pr-tracker.url = "github:rileytwo/pr-tracker-rust";
+  inputs.pr-tracker.url = "github:rileymathews/pr-tracker-rust";
 
   outputs = { self, nixpkgs, home-manager, pr-tracker, ... }: {
     homeConfigurations.me = home-manager.lib.homeManagerConfiguration {

@@ -1,0 +1,21 @@
+[package]
+name = "pr-tracker-rust"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+anyhow = "1.0.98"
+chrono = { version = "0.4.40", features = ["serde"] }
+clap = { version = "4.5.32", features = ["derive"] }
+crossterm = "0.28.1"
+open = "5.3.2"
+ratatui = "0.29.0"
+reqwest = { version = "0.12.14", default-features = false, features = ["json", "rustls-tls"] }
+serde = { version = "1.0.219", features = ["derive"] }
+serde_json = "1.0.140"
+sqlx = { version = "0.8.4", features = ["runtime-tokio-rustls", "sqlite", "chrono", "migrate"] }
+thiserror = "2.0.12"
+tokio = { version = "1.44.1", features = ["macros", "rt-multi-thread", "time"] }
+
+[dev-dependencies]
+pretty_assertions = "1.4.1"

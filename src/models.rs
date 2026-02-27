@@ -43,6 +43,16 @@ pub struct PullRequest {
 }
 
 impl PullRequest {
+    pub fn is_acknowledged(&self) -> bool {
+        let Some(last_ack) = self.last_acknowledged_at else {
+            return false;
+        };
+
+        self.last_comment_at <= last_ack
+            && self.last_commit_at <= last_ack
+            && self.last_ci_status_update_at <= last_ack
+    }
+
     pub fn display_string(&self) -> String {
         format!(
             "{} {} : {}/{}",

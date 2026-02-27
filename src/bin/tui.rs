@@ -1,6 +1,7 @@
 use std::io;
 use std::time::Duration;
 
+use chrono::Utc;
 use crossterm::event::{self, Event, KeyCode};
 use crossterm::terminal::{
     disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen,
@@ -19,11 +20,67 @@ use ratatui::Terminal;
 struct Model {
     prs: Vec<PullRequest>,
     cursor: usize,
+    view_mode: ViewMode,
+}
+
+#[derive(Clone, Copy)]
+enum ViewMode {
+    Active,
+    Acknowledged,
 }
 
 impl Model {
     fn new(prs: Vec<PullRequest>) -> Self {
-        Self { prs, cursor: 0 }
+        Self {
+            prs,
+            cursor: 0,
+            view_mode: ViewMode::Active,
+        }
+    }
+
+    fn filtered_indices(&self) -> Vec<usize> {
+        self.prs
+            .iter()
+            .enumerate()
+            .filter_map(|(index, pr)| {
+                let include = match self.view_mode {
+                    ViewMode::Active => !pr.is_acknowledged(),
+                    ViewMode::Acknowledged => pr.is_acknowledged(),
+                };
+
+                if include { Some(index) } else { None }
+            })
+            .collect()
+    }
+
+    fn selected_index(&self, filtered_indices: &[usize]) -> Option<usize> {
+        filtered_indices.get(self.cursor).copied()
+    }
+
+    fn ensure_cursor_in_range(&mut self, len: usize) {
+        if len == 0 {
+            self.cursor = 0;
+            return;
+        }
+
+        if self.cursor >= len {
+            self.cursor = len - 1;
+        }
+    }
+
+    fn toggle_view(&mut self) {
+        self.view_mode = match self.view_mode {
+            ViewMode::Active => ViewMode::Acknowledged,
+            ViewMode::Acknowledged => ViewMode::Active,
+        };
+        self.cursor = 0;
+    }
+
+    fn view_label(&self) -> &'static str {
+        match self.view_mode {
+            ViewMode::Active => "active",
+            ViewMode::Acknowledged => "acknowledged",
+        }
     }
 }
 
@@ -35,11 +92,11 @@ async fn main() -> anyhow::Result<()> {
     repo.apply_migrations().await?;
 
     let prs = repo.get_all_prs().await?;
-    run_tui(Model::new(prs))?;
+    run_tui(Model::new(prs), &repo).await?;
     Ok(())
 }
 
-fn run_tui(mut model: Model) -> anyhow::Result<()> {
+async fn run_tui(mut model: Model, repo: &DatabaseRepository) -> anyhow::Result<()> {
     enable_raw_mode()?;
     let mut stdout = io::stdout();
     stdout.execute(EnterAlternateScreen)?;
@@ -56,19 +113,44 @@ fn run_tui(mut model: Model) -> anyhow::Result<()> {
                 match key.code {
                     KeyCode::Char('q') => should_quit = true,
                     KeyCode::Up | KeyCode::Char('k') => {
+                        let filtered_indices = model.filtered_indices();
+                        model.ensure_cursor_in_range(filtered_indices.len());
                         if model.cursor > 0 {
                             model.cursor -= 1;
                         }
                     }
                     KeyCode::Down | KeyCode::Char('j') => {
-                        if model.cursor + 1 < model.prs.len() {
+                        let filtered_indices = model.filtered_indices();
+                        model.ensure_cursor_in_range(filtered_indices.len());
+                        if model.cursor + 1 < filtered_indices.len() {
                             model.cursor += 1;
                         }
                     }
                     KeyCode::Enter | KeyCode::Char(' ') => {
-                        if let Some(pr) = model.prs.get(model.cursor) {
+                        let filtered_indices = model.filtered_indices();
+                        model.ensure_cursor_in_range(filtered_indices.len());
+                        if let Some(pr_index) = model.selected_index(&filtered_indices) {
+                            let pr = &model.prs[pr_index];
                             let _ = open::that(pr.url());
                         }
+                    }
+                    KeyCode::Char('a') => {
+                        let filtered_indices = model.filtered_indices();
+                        model.ensure_cursor_in_range(filtered_indices.len());
+                        if let Some(pr_index) = model.selected_index(&filtered_indices) {
+                            let mut pr = model.prs[pr_index].clone();
+                            pr.last_acknowledged_at = Some(Utc::now());
+                            repo.save_pr(&pr).await?;
+                            model.prs[pr_index] = pr;
+
+                            let updated_filtered_indices = model.filtered_indices();
+                            model.ensure_cursor_in_range(updated_filtered_indices.len());
+                        }
+                    }
+                    KeyCode::Char('v') => {
+                        model.toggle_view();
+                        let filtered_indices = model.filtered_indices();
+                        model.ensure_cursor_in_range(filtered_indices.len());
                     }
                     _ => {}
                 }
@@ -82,6 +164,11 @@ fn run_tui(mut model: Model) -> anyhow::Result<()> {
 }
 
 fn draw(frame: &mut ratatui::Frame<'_>, model: &Model) {
+    let filtered_indices = model.filtered_indices();
+    let selected = model
+        .selected_index(&filtered_indices)
+        .and_then(|index| model.prs.get(index));
+
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
@@ -91,7 +178,6 @@ fn draw(frame: &mut ratatui::Frame<'_>, model: &Model) {
         ])
         .split(frame.area());
 
-    let selected = model.prs.get(model.cursor);
     let header = Paragraph::new(Line::from(vec![
         Span::styled(
             "PR Tracker",
@@ -101,8 +187,13 @@ fn draw(frame: &mut ratatui::Frame<'_>, model: &Model) {
         ),
         Span::raw("  |  "),
         Span::styled(
-            format!("{} PRs", model.prs.len()),
+            format!("{} PRs", filtered_indices.len()),
             Style::default().fg(Color::White),
+        ),
+        Span::raw("  |  "),
+        Span::styled(
+            format!("view: {}", model.view_label()),
+            Style::default().fg(Color::LightCyan),
         ),
         Span::raw("  |  "),
         Span::styled(
@@ -116,9 +207,9 @@ fn draw(frame: &mut ratatui::Frame<'_>, model: &Model) {
     .block(Block::default().borders(Borders::ALL).title("Overview"));
     frame.render_widget(header, chunks[0]);
 
-    let items: Vec<ListItem<'_>> = model
-        .prs
+    let items: Vec<ListItem<'_>> = filtered_indices
         .iter()
+        .map(|pr_index| &model.prs[*pr_index])
         .enumerate()
         .map(|(index, pr)| {
             let ci_style = ci_style(pr.ci_status);
@@ -166,7 +257,7 @@ fn draw(frame: &mut ratatui::Frame<'_>, model: &Model) {
     let list = List::new(items)
         .block(
             Block::default()
-                .title("Tracked Pull Requests")
+                .title(format!("{} Pull Requests", title_case(model.view_label())))
                 .borders(Borders::ALL),
         )
         .highlight_style(
@@ -177,14 +268,24 @@ fn draw(frame: &mut ratatui::Frame<'_>, model: &Model) {
         .highlight_symbol("▸ ");
 
     let mut state = ListState::default();
-    if !model.prs.is_empty() {
+    if !filtered_indices.is_empty() {
         state.select(Some(model.cursor));
     }
     frame.render_stateful_widget(list, chunks[1], &mut state);
 
-    let footer = Paragraph::new("j/k or arrows: move  |  enter/space: open PR  |  q: quit")
-        .block(Block::default().borders(Borders::TOP));
+    let footer = Paragraph::new(
+        "j/k or arrows: move  |  enter/space: open PR  |  a: acknowledge  |  v: toggle view  |  q: quit",
+    )
+    .block(Block::default().borders(Borders::TOP));
     frame.render_widget(footer, chunks[2]);
+}
+
+fn title_case(value: &str) -> String {
+    let mut chars = value.chars();
+    let Some(first) = chars.next() else {
+        return String::new();
+    };
+    format!("{}{}", first.to_ascii_uppercase(), chars.as_str())
 }
 
 fn ci_style(status: CiStatus) -> Style {

@@ -152,20 +152,33 @@ async fn handle_authors_from_teams(repo: &DatabaseRepository) -> anyhow::Result<
     }
 
     let current_login_lower = user.username.to_lowercase();
-    let tracked_lower: HashSet<String> = repo
-        .get_tracked_authors()
-        .await?
-        .into_iter()
+    let already_tracked: Vec<String> = repo.get_tracked_authors().await?;
+    let tracked_lower: HashSet<String> = already_tracked
+        .iter()
         .map(|s| s.to_lowercase())
         .collect();
 
-    let candidates: Vec<String> = all_members
-        .into_iter()
-        .filter(|login| {
-            let lower = login.to_lowercase();
-            lower != current_login_lower && !tracked_lower.contains(&lower)
-        })
-        .collect();
+    // Split all_members into already-tracked teammates and new candidates
+    let mut tracked_teammates: Vec<String> = Vec::new();
+    let mut candidates: Vec<String> = Vec::new();
+    for login in all_members {
+        let lower = login.to_lowercase();
+        if lower == current_login_lower {
+            // skip self
+        } else if tracked_lower.contains(&lower) {
+            tracked_teammates.push(login);
+        } else {
+            candidates.push(login);
+        }
+    }
+
+    if !tracked_teammates.is_empty() {
+        println!("Already tracking from your teams:");
+        for login in &tracked_teammates {
+            println!("  ✓ {}", login);
+        }
+        println!();
+    }
 
     if candidates.is_empty() {
         println!("All team members are already being tracked.");
@@ -183,6 +196,7 @@ async fn handle_authors_from_teams(repo: &DatabaseRepository) -> anyhow::Result<
         candidates,
     )
     .with_help_message("↑↓ navigate  space select  type to filter  enter confirm  esc cancel")
+    .with_page_size(15)
     .prompt_skippable()
     .map_err(|e| anyhow::anyhow!("selection prompt failed: {e}"))?
     {

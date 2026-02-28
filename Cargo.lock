@@ -1767,6 +1767,7 @@ dependencies = [
  "chrono",
  "clap",
  "crossterm 0.28.1",
+ "fuzzy-matcher",
  "inquire",
  "notify-rust",
  "open",

@@ -126,3 +126,20 @@ pub struct CombinedStatus {
 pub struct CheckRunsPage {
     pub check_runs: Vec<CheckRun>,
 }
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct TeamOrg {
+    pub login: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct UserTeam {
+    pub slug: String,
+    pub name: String,
+    pub organization: TeamOrg,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct TeamMember {
+    pub login: String,
+}

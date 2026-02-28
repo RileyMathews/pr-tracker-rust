@@ -168,10 +168,22 @@ impl DatabaseRepository {
     }
 
     pub async fn save_tracked_author(&self, author: &str) -> anyhow::Result<()> {
-        sqlx::query("INSERT INTO tracked_authors (author) VALUES (?1)")
+        sqlx::query("INSERT OR IGNORE INTO tracked_authors (author) VALUES (?1)")
             .bind(author)
             .execute(&self.pool)
             .await?;
+        Ok(())
+    }
+
+    pub async fn save_tracked_authors_batch(&self, authors: &[String]) -> anyhow::Result<()> {
+        let mut tx = self.pool.begin().await?;
+        for author in authors {
+            sqlx::query("INSERT OR IGNORE INTO tracked_authors (author) VALUES (?1)")
+                .bind(author)
+                .execute(&mut *tx)
+                .await?;
+        }
+        tx.commit().await?;
         Ok(())
     }
 

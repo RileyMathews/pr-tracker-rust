@@ -178,21 +178,22 @@ async fn handle_authors_from_teams(repo: &DatabaseRepository) -> anyhow::Result<
         );
     }
 
-    let selections = dialoguer::MultiSelect::new()
-        .with_prompt("Select authors to track (space to toggle, enter to confirm)")
-        .items(&candidates)
-        .interact()?;
+    let selected_logins = match inquire::MultiSelect::new(
+        "Select authors to track:",
+        candidates,
+    )
+    .with_help_message("↑↓ navigate  space select  type to filter  enter confirm  esc cancel")
+    .prompt_skippable()
+    .map_err(|e| anyhow::anyhow!("selection prompt failed: {e}"))?
+    {
+        Some(logins) if !logins.is_empty() => logins,
+        _ => {
+            println!("No authors selected.");
+            return Ok(());
+        }
+    };
 
-    if selections.is_empty() {
-        println!("No authors selected.");
-        return Ok(());
-    }
-
-    let count = selections.len();
-    let selected_logins: Vec<String> = selections
-        .into_iter()
-        .map(|idx| candidates[idx].clone())
-        .collect();
+    let count = selected_logins.len();
     repo.save_tracked_authors_batch(&selected_logins).await?;
 
     println!("Saved {} author(s).", count);

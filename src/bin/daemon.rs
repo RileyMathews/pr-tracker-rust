@@ -27,9 +27,9 @@ async fn main() -> anyhow::Result<()> {
                 println!(
                     "sync ok repos={} new={} updated={} deleted={}",
                     summary.synced_repositories,
-                    summary.new_prs,
-                    summary.updated_prs,
-                    summary.deleted_prs
+                    summary.new_prs.len(),
+                    summary.updated_prs.len(),
+                    summary.deleted_prs.len()
                 );
             }
             Err(err) => eprintln!("sync failed: {err:#}"),

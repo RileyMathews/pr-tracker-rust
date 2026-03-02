@@ -25,6 +25,12 @@ impl CiStatus {
     }
 }
 
+pub enum ChangeKind {
+    NewComment,
+    NewCommit,
+    NewCistatus
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PullRequest {
     pub number: i64,
@@ -59,6 +65,24 @@ impl PullRequest {
             "{} {} : {}/{}",
             self.author, self.title, self.repository, self.number
         )
+    }
+
+    pub fn all_changes(&self) -> Vec<ChangeKind> {
+        let Some(last_ack) = self.last_acknowledged_at else {
+            return vec![ChangeKind::NewComment, ChangeKind::NewCommit, ChangeKind::NewCistatus];
+        };
+
+        let mut changes = Vec::new();
+        if self.last_comment_at > last_ack {
+            changes.push(ChangeKind::NewComment);
+        }
+        if self.last_commit_at > last_ack {
+            changes.push(ChangeKind::NewCommit);
+        }
+        if self.last_ci_status_update_at > last_ack {
+            changes.push(ChangeKind::NewCistatus);
+        }
+        changes
     }
 
     pub fn updates_since_last_ack(&self) -> String {

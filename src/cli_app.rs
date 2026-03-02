@@ -263,7 +263,7 @@ async fn handle_sync(repo: &DatabaseRepository) -> anyhow::Result<()> {
 
     println!(
         "Sync complete: repos={} new={} updated={} deleted={}",
-        summary.synced_repositories, summary.new_prs, summary.updated_prs, summary.deleted_prs
+        summary.synced_repositories, summary.new_prs.len(), summary.updated_prs.len(), summary.deleted_prs.len()
     );
     Ok(())
 }
@@ -282,7 +282,7 @@ async fn handle_prs(repo: &DatabaseRepository) -> anyhow::Result<()> {
 }
 
 fn notify_sync_changes(summary: &SyncRunSummary) -> anyhow::Result<()> {
-    let changed = summary.new_prs + summary.updated_prs;
+    let changed = summary.new_prs.len() + summary.updated_prs.len();
 
     if changed == 0 {
         return Ok(());
@@ -290,7 +290,7 @@ fn notify_sync_changes(summary: &SyncRunSummary) -> anyhow::Result<()> {
 
     let body = format!(
         "{} new, {} updated PRs",
-        summary.new_prs, summary.updated_prs
+        summary.new_prs.len(), summary.updated_prs.len()
     );
 
     #[cfg(target_os = "linux")]

@@ -3,14 +3,15 @@ use chrono::Utc;
 use crate::core::{process_pull_request_sync_results, SyncDiff};
 use crate::db::DatabaseRepository;
 use crate::github::GitHubClient;
+use crate::models::PullRequest;
 use crate::service;
 
 #[derive(Debug, Default)]
 pub struct SyncRunSummary {
     pub synced_repositories: usize,
-    pub new_prs: usize,
-    pub updated_prs: usize,
-    pub deleted_prs: usize,
+    pub new_prs: Vec<PullRequest>,
+    pub updated_prs: Vec<PullRequest>,
+    pub deleted_prs: Vec<PullRequest>,
 }
 
 #[derive(Debug, Default)]
@@ -111,17 +112,21 @@ where
             repository.delete_pr(&pr.repository, pr.number).await?;
         }
 
+        let new_count = new_prs.len();
+        let updated_count = updated_prs.len();
+        let deleted_count = removed_prs.len();
+
         summary.synced_repositories += 1;
-        summary.new_prs += new_prs.len();
-        summary.updated_prs += updated_prs.len();
-        summary.deleted_prs += removed_prs.len();
+        summary.new_prs.extend(new_prs);
+        summary.updated_prs.extend(updated_prs);
+        summary.deleted_prs.extend(removed_prs);
         progress_callback(SyncProgress::FullSyncRepositoryCompleted {
             repository: repo_name.clone(),
             repository_index: index + 1,
             total_repositories,
-            new_prs: new_prs.len(),
-            updated_prs: updated_prs.len(),
-            deleted_prs: removed_prs.len(),
+            new_prs: new_count,
+            updated_prs: updated_count,
+            deleted_prs: deleted_count,
         });
     }
 

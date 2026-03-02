@@ -279,25 +279,37 @@ async fn handle_prs(repo: &DatabaseRepository) -> anyhow::Result<()> {
 }
 
 fn notify_sync_changes(summary: &SyncRunSummary) -> anyhow::Result<()> {
-    let changed = summary.new_prs.len() + summary.updated_prs.len();
-
-    if changed == 0 {
+    if summary.new_prs.is_empty() && summary.updated_prs.is_empty() {
         return Ok(());
     }
 
-    let body = format!(
-        "{} new, {} updated PRs",
-        summary.new_prs.len(),
-        summary.updated_prs.len()
-    );
-
     #[cfg(target_os = "linux")]
     {
-        notify_rust::Notification::new()
-            .summary("PR Tracker")
-            .body(&body)
-            .appname("pr-tracker")
-            .show()?;
+        for pr in &summary.new_prs {
+            let body = format!(
+                "{}#{} by {} {}",
+                pr.repository, pr.number, pr.author, pr.title
+            );
+
+            notify_rust::Notification::new()
+                .summary("PR Tracker - New PR")
+                .body(&body)
+                .appname("pr-tracker")
+                .show()?;
+        }
+
+        for pr in &summary.updated_prs {
+            let body = format!(
+                "{}#{} by {} {}",
+                pr.repository, pr.number, pr.author, pr.title
+            );
+
+            notify_rust::Notification::new()
+                .summary("PR Tracker - Updated PR")
+                .body(&body)
+                .appname("pr-tracker")
+                .show()?;
+        }
     }
 
     Ok(())

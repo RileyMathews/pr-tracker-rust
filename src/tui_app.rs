@@ -19,10 +19,7 @@ use tokio::sync::mpsc;
 use crate::db::DatabaseRepository;
 use crate::github::GitHubClient;
 use crate::models::{CiStatus, PullRequest};
-use crate::sync::{
-    refresh_existing_pull_requests_with_progress, sync_all_tracked_with_progress,
-    QuickRefreshSummary, SyncRunSummary,
-};
+use crate::sync::{sync_all_tracked_with_progress, SyncRunSummary};
 
 struct Model {
     prs: Vec<PullRequest>,
@@ -41,14 +38,12 @@ enum ViewMode {
 #[derive(Clone, Copy)]
 enum BackgroundJob {
     FullSync,
-    QuickRefresh,
     TeamsFetch,
 }
 
 enum BackgroundMessage {
     Progress,
     FullSyncFinished(anyhow::Result<SyncRunSummary>),
-    QuickRefreshFinished(anyhow::Result<QuickRefreshSummary>),
     TeamsFetchFinished(anyhow::Result<TeamsPayload>),
 }
 
@@ -239,16 +234,6 @@ async fn run_tui_inner(
                     let filtered_indices = model.filtered_indices();
                     model.ensure_cursor_in_range(filtered_indices.len());
                 }
-                BackgroundMessage::QuickRefreshFinished(result) => {
-                    active_job = None;
-                    spinner_tick = 0;
-
-                    let _ = result;
-
-                    model.prs = repo.get_all_prs().await?;
-                    let filtered_indices = model.filtered_indices();
-                    model.ensure_cursor_in_range(filtered_indices.len());
-                }
                 BackgroundMessage::TeamsFetchFinished(result) => {
                     active_job = None;
                     spinner_tick = 0;
@@ -332,8 +317,8 @@ async fn run_tui_inner(
                                 continue;
                             }
 
-                            active_job = Some(BackgroundJob::QuickRefresh);
-                            spawn_quick_refresh(repo.clone(), tx.clone());
+                            active_job = Some(BackgroundJob::FullSync);
+                            spawn_full_sync(repo.clone(), tx.clone());
                         }
                         KeyCode::Char('t') => {
                             if active_job.is_none() {
@@ -605,7 +590,7 @@ fn draw_pr_list(
     };
 
     let footer = Paragraph::new(format!(
-        "j/k or arrows: move  |  enter/space: open PR  |  a: acknowledge  |  v: toggle view  |  s: full sync  |  r: quick refresh  |  t: authors from teams  |  q: quit{}",
+        "j/k or arrows: move  |  enter/space: open PR  |  a: acknowledge  |  v: toggle view  |  s: full sync  |  r: refresh  |  t: authors from teams  |  q: quit{}",
         spinner
     ))
     .block(Block::default().borders(Borders::TOP));
@@ -799,14 +784,6 @@ fn spawn_full_sync(repo: DatabaseRepository, tx: mpsc::UnboundedSender<Backgroun
     });
 }
 
-fn spawn_quick_refresh(repo: DatabaseRepository, tx: mpsc::UnboundedSender<BackgroundMessage>) {
-    tokio::spawn(async move {
-        let progress_tx = tx.clone();
-        let result = run_quick_refresh(repo, progress_tx).await;
-        let _ = tx.send(BackgroundMessage::QuickRefreshFinished(result));
-    });
-}
-
 fn spawn_teams_fetch(repo: DatabaseRepository, tx: mpsc::UnboundedSender<BackgroundMessage>) {
     tokio::spawn(async move {
         let result = run_teams_fetch(repo).await;
@@ -824,21 +801,6 @@ async fn run_full_sync(
     let github = GitHubClient::new(user.access_token)?;
 
     sync_all_tracked_with_progress(&repo, &github, |_| {
-        let _ = tx.send(BackgroundMessage::Progress);
-    })
-    .await
-}
-
-async fn run_quick_refresh(
-    repo: DatabaseRepository,
-    tx: mpsc::UnboundedSender<BackgroundMessage>,
-) -> anyhow::Result<QuickRefreshSummary> {
-    let user = repo.get_user().await?.ok_or_else(|| {
-        anyhow::anyhow!("no authenticated user found, run 'cli auth <token>' first")
-    })?;
-    let github = GitHubClient::new(user.access_token)?;
-
-    refresh_existing_pull_requests_with_progress(&repo, &github, |_| {
         let _ = tx.send(BackgroundMessage::Progress);
     })
     .await
@@ -886,7 +848,6 @@ async fn run_teams_fetch(repo: DatabaseRepository) -> anyhow::Result<TeamsPayloa
 fn background_job_label(job: BackgroundJob) -> &'static str {
     match job {
         BackgroundJob::FullSync => "sync",
-        BackgroundJob::QuickRefresh => "refresh",
         BackgroundJob::TeamsFetch => "fetching teams",
     }
 }

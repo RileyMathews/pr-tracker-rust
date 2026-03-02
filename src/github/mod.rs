@@ -3,6 +3,7 @@ use std::fmt::Display;
 use reqwest::header::{HeaderMap, HeaderValue, ACCEPT, AUTHORIZATION, USER_AGENT};
 use serde::de::DeserializeOwned;
 
+pub mod graphql;
 pub mod schema;
 
 const BASE_URL: &str = "https://api.github.com";
@@ -56,94 +57,6 @@ impl GitHubClient {
         self.get_json(&format!("{BASE_URL}/user")).await
     }
 
-    pub async fn fetch_open_pull_requests(
-        &self,
-        repo_name: &str,
-    ) -> anyhow::Result<Vec<schema::PullRequest>> {
-        ensure_not_blank("repo name", repo_name)?;
-
-        self.get_paginated(&format!(
-            "{BASE_URL}/repos/{repo_name}/pulls?state=open&per_page={PER_PAGE}&page=1"
-        ))
-        .await
-    }
-
-    pub async fn fetch_pull_request_details(
-        &self,
-        repo_name: &str,
-        pr_id: i64,
-    ) -> anyhow::Result<schema::PullRequestDetails> {
-        ensure_not_blank("repo name", repo_name)?;
-        if pr_id <= 0 {
-            anyhow::bail!("pr id must be greater than zero");
-        }
-
-        let mut details: schema::PullRequestDetails = self
-            .get_json(&format!("{BASE_URL}/repos/{repo_name}/pulls/{pr_id}"))
-            .await?;
-
-        details.issue_comments = self
-            .get_paginated(&format!(
-                "{BASE_URL}/repos/{repo_name}/issues/{pr_id}/comments?per_page={PER_PAGE}&page=1"
-            ))
-            .await?;
-
-        details.review_comments = self
-            .get_paginated(&format!(
-                "{BASE_URL}/repos/{repo_name}/pulls/{pr_id}/comments?per_page={PER_PAGE}&page=1"
-            ))
-            .await?;
-
-        Ok(details)
-    }
-
-    pub async fn fetch_pull_request_ci_statuses(
-        &self,
-        repo_name: &str,
-        pr_id: i64,
-    ) -> anyhow::Result<schema::PullRequestCiStatuses> {
-        ensure_not_blank("repo name", repo_name)?;
-        if pr_id <= 0 {
-            anyhow::bail!("pr id must be greater than zero");
-        }
-
-        let pr: schema::PullRequestHead = self
-            .get_json(&format!("{BASE_URL}/repos/{repo_name}/pulls/{pr_id}"))
-            .await?;
-
-        if pr.head.sha.trim().is_empty() {
-            anyhow::bail!("pull request head sha is missing");
-        }
-
-        let status_response: schema::CombinedStatus = self
-            .get_json(&format!(
-                "{BASE_URL}/repos/{repo_name}/commits/{}/status",
-                pr.head.sha
-            ))
-            .await?;
-
-        let mut check_runs = Vec::new();
-        let mut next_url = Some(format!(
-            "{BASE_URL}/repos/{repo_name}/commits/{}/check-runs?per_page={PER_PAGE}&page=1",
-            pr.head.sha
-        ));
-
-        while let Some(url) = next_url {
-            let (page, link_header): (schema::CheckRunsPage, Option<String>) =
-                self.get_json_with_link(&url).await?;
-            check_runs.extend(page.check_runs);
-            next_url = link_header.and_then(|link| parse_next_url(&link));
-        }
-
-        Ok(schema::PullRequestCiStatuses {
-            pull_request_number: pr.number,
-            head_sha: pr.head.sha,
-            combined_state: status_response.state,
-            statuses: status_response.statuses,
-            check_runs,
-        })
-    }
-
     pub async fn fetch_user_teams(&self) -> anyhow::Result<Vec<schema::UserTeam>> {
         let url = format!("{BASE_URL}/user/teams?per_page={PER_PAGE}&page=1");
         self.get_paginated(&url).await.map_err(|err| {
@@ -177,6 +90,104 @@ impl GitHubClient {
                 err
             }
         })
+    }
+
+    pub async fn fetch_open_pull_requests_graphql(
+        &self,
+        repo_name: &str,
+    ) -> anyhow::Result<Vec<graphql::PullRequestNode>> {
+        ensure_not_blank("repo name", repo_name)?;
+
+        let parts: Vec<&str> = repo_name.split('/').collect();
+        if parts.len() != 2 {
+            anyhow::bail!("invalid repo name format, expected 'owner/name': {repo_name}");
+        }
+        let owner = parts[0];
+        let name = parts[1];
+
+        let mut all_nodes = Vec::new();
+        let mut cursor: Option<String> = None;
+
+        loop {
+            let variables = serde_json::json!({
+                "owner": owner,
+                "name": name,
+                "cursor": cursor,
+            });
+
+            let response: graphql::QueryResponse = self
+                .post_graphql(graphql::OPEN_PULL_REQUESTS_QUERY, variables)
+                .await?;
+
+            let repo = response.repository.ok_or_else(|| {
+                anyhow::anyhow!("repository '{}' not found or not accessible", repo_name)
+            })?;
+            let pull_requests = repo.pull_requests;
+            all_nodes.extend(pull_requests.nodes);
+
+            if pull_requests.page_info.has_next_page {
+                cursor = pull_requests.page_info.end_cursor;
+                if cursor.is_none() {
+                    break;
+                }
+            } else {
+                break;
+            }
+        }
+
+        Ok(all_nodes)
+    }
+
+    async fn post_graphql<T: DeserializeOwned>(
+        &self,
+        query: &str,
+        variables: serde_json::Value,
+    ) -> anyhow::Result<T> {
+        let url = "https://api.github.com/graphql";
+
+        if self.log_requests {
+            eprintln!("[github] POST {url}");
+        }
+
+        let body = serde_json::json!({
+            "query": query,
+            "variables": variables,
+        });
+
+        let response = self.http.post(url).json(&body).send().await?;
+        let status = response.status();
+
+        if !status.is_success() {
+            let body = response.text().await.unwrap_or_default();
+            anyhow::bail!(
+                "github API request failed: status={} body={}",
+                status.as_u16(),
+                body.trim()
+            );
+        }
+
+        let response_body: serde_json::Value = response.json().await?;
+
+        if let Some(errors) = response_body.get("errors") {
+            let data = response_body.get("data");
+            let data_is_present = data.is_some_and(|d| !d.is_null());
+
+            if !data_is_present {
+                anyhow::bail!("graphql errors: {errors}");
+            }
+
+            if self.log_requests {
+                eprintln!("[github] graphql response contained errors: {errors}");
+            }
+        }
+
+        let data = response_body
+            .get("data")
+            .ok_or_else(|| anyhow::anyhow!("graphql response missing 'data' field"))?
+            .clone();
+
+        serde_json::from_value(data)
+            .map_err(|err| anyhow::anyhow!("error decoding graphql response: {err}"))
     }
 
     async fn get_paginated<T>(&self, first_url: &str) -> anyhow::Result<Vec<T>>

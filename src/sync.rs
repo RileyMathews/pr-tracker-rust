@@ -14,13 +14,6 @@ pub struct SyncRunSummary {
     pub deleted_prs: Vec<PullRequest>,
 }
 
-#[derive(Debug, Default)]
-pub struct QuickRefreshSummary {
-    pub total_prs: usize,
-    pub refreshed_prs: usize,
-    pub failed_prs: usize,
-}
-
 #[derive(Debug, Clone)]
 pub enum SyncProgress {
     FullSyncStarted {
@@ -38,23 +31,6 @@ pub enum SyncProgress {
         new_prs: usize,
         updated_prs: usize,
         deleted_prs: usize,
-    },
-    QuickRefreshStarted {
-        total_prs: usize,
-    },
-    QuickRefreshPullRequestStarted {
-        repository: String,
-        pr_number: i64,
-        pr_index: usize,
-        total_prs: usize,
-    },
-    QuickRefreshPullRequestCompleted {
-        repository: String,
-        pr_number: i64,
-        pr_index: usize,
-        total_prs: usize,
-        ok: bool,
-        error: Option<String>,
     },
 }
 
@@ -128,91 +104,6 @@ where
             updated_prs: updated_count,
             deleted_prs: deleted_count,
         });
-    }
-
-    Ok(summary)
-}
-
-pub async fn refresh_existing_pull_requests(
-    repository: &DatabaseRepository,
-    github: &GitHubClient,
-) -> anyhow::Result<QuickRefreshSummary> {
-    refresh_existing_pull_requests_with_progress(repository, github, |_| {}).await
-}
-
-pub async fn refresh_existing_pull_requests_with_progress<F>(
-    repository: &DatabaseRepository,
-    github: &GitHubClient,
-    mut progress_callback: F,
-) -> anyhow::Result<QuickRefreshSummary>
-where
-    F: FnMut(SyncProgress),
-{
-    let existing_prs = repository.get_all_prs().await?;
-    let mut summary = QuickRefreshSummary {
-        total_prs: existing_prs.len(),
-        ..QuickRefreshSummary::default()
-    };
-
-    progress_callback(SyncProgress::QuickRefreshStarted {
-        total_prs: summary.total_prs,
-    });
-
-    for (index, existing_pr) in existing_prs.into_iter().enumerate() {
-        progress_callback(SyncProgress::QuickRefreshPullRequestStarted {
-            repository: existing_pr.repository.clone(),
-            pr_number: existing_pr.number,
-            pr_index: index + 1,
-            total_prs: summary.total_prs,
-        });
-
-        let refreshed_result = service::fetch_pull_request_details(
-            github,
-            &existing_pr.repository,
-            existing_pr.number,
-        )
-        .await;
-
-        match refreshed_result {
-            Ok(mut refreshed_pr) => {
-                refreshed_pr.last_acknowledged_at = existing_pr.last_acknowledged_at;
-                refreshed_pr.last_commit_at = if existing_pr.head_sha != refreshed_pr.head_sha {
-                    Utc::now()
-                } else {
-                    existing_pr.last_commit_at
-                };
-                refreshed_pr.last_ci_status_update_at =
-                    if existing_pr.ci_status != refreshed_pr.ci_status {
-                        Utc::now()
-                    } else {
-                        existing_pr.last_ci_status_update_at
-                    };
-
-                repository.save_pr(&refreshed_pr).await?;
-                summary.refreshed_prs += 1;
-
-                progress_callback(SyncProgress::QuickRefreshPullRequestCompleted {
-                    repository: refreshed_pr.repository,
-                    pr_number: refreshed_pr.number,
-                    pr_index: index + 1,
-                    total_prs: summary.total_prs,
-                    ok: true,
-                    error: None,
-                });
-            }
-            Err(err) => {
-                summary.failed_prs += 1;
-                let error = err.to_string();
-                progress_callback(SyncProgress::QuickRefreshPullRequestCompleted {
-                    repository: existing_pr.repository,
-                    pr_number: existing_pr.number,
-                    pr_index: index + 1,
-                    total_prs: summary.total_prs,
-                    ok: false,
-                    error: Some(error),
-                });
-            }
-        }
     }
 
     Ok(summary)

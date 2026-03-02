@@ -28,7 +28,7 @@ impl CiStatus {
 pub enum ChangeKind {
     NewComment,
     NewCommit,
-    NewCistatus
+    NewCistatus,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -69,7 +69,11 @@ impl PullRequest {
 
     pub fn all_changes(&self) -> Vec<ChangeKind> {
         let Some(last_ack) = self.last_acknowledged_at else {
-            return vec![ChangeKind::NewComment, ChangeKind::NewCommit, ChangeKind::NewCistatus];
+            return vec![
+                ChangeKind::NewComment,
+                ChangeKind::NewCommit,
+                ChangeKind::NewCistatus,
+            ];
         };
 
         let mut changes = Vec::new();

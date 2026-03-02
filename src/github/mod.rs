@@ -164,9 +164,8 @@ impl GitHubClient {
         org: &str,
         team_slug: &str,
     ) -> anyhow::Result<Vec<schema::TeamMember>> {
-        let url = format!(
-            "{BASE_URL}/orgs/{org}/teams/{team_slug}/members?per_page={PER_PAGE}&page=1"
-        );
+        let url =
+            format!("{BASE_URL}/orgs/{org}/teams/{team_slug}/members?per_page={PER_PAGE}&page=1");
         self.get_paginated(&url).await.map_err(|err| {
             if err.to_string().contains("status=403") {
                 anyhow::anyhow!(

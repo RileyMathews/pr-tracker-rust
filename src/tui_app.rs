@@ -3,11 +3,11 @@ use std::time::Duration;
 
 use chrono::Utc;
 use crossterm::event::{self, Event, KeyCode};
-use fuzzy_matcher::{skim::SkimMatcherV2, FuzzyMatcher};
 use crossterm::terminal::{
     disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen,
 };
 use crossterm::ExecutableCommand;
+use fuzzy_matcher::{skim::SkimMatcherV2, FuzzyMatcher};
 use ratatui::backend::CrosstermBackend;
 use ratatui::layout::{Constraint, Direction, Layout};
 use ratatui::style::{Color, Modifier, Style};
@@ -277,76 +277,74 @@ async fn run_tui_inner(
         if event::poll(Duration::from_millis(200))? {
             if let Event::Key(key) = event::read()? {
                 match model.screen {
-                    Screen::PrList => {
-                        match key.code {
-                            KeyCode::Char('q') => should_quit = true,
-                            KeyCode::Up | KeyCode::Char('k') => {
-                                let filtered_indices = model.filtered_indices();
-                                model.ensure_cursor_in_range(filtered_indices.len());
-                                if model.cursor > 0 {
-                                    model.cursor -= 1;
-                                }
+                    Screen::PrList => match key.code {
+                        KeyCode::Char('q') => should_quit = true,
+                        KeyCode::Up | KeyCode::Char('k') => {
+                            let filtered_indices = model.filtered_indices();
+                            model.ensure_cursor_in_range(filtered_indices.len());
+                            if model.cursor > 0 {
+                                model.cursor -= 1;
                             }
-                            KeyCode::Down | KeyCode::Char('j') => {
-                                let filtered_indices = model.filtered_indices();
-                                model.ensure_cursor_in_range(filtered_indices.len());
-                                if model.cursor + 1 < filtered_indices.len() {
-                                    model.cursor += 1;
-                                }
-                            }
-                            KeyCode::Enter | KeyCode::Char(' ') => {
-                                let filtered_indices = model.filtered_indices();
-                                model.ensure_cursor_in_range(filtered_indices.len());
-                                if let Some(pr_index) = model.selected_index(&filtered_indices) {
-                                    let pr = &model.prs[pr_index];
-                                    let _ = open::that(pr.url());
-                                }
-                            }
-                            KeyCode::Char('a') => {
-                                let filtered_indices = model.filtered_indices();
-                                model.ensure_cursor_in_range(filtered_indices.len());
-                                if let Some(pr_index) = model.selected_index(&filtered_indices) {
-                                    let mut pr = model.prs[pr_index].clone();
-                                    pr.last_acknowledged_at = Some(Utc::now());
-                                    repo.save_pr(&pr).await?;
-                                    model.prs[pr_index] = pr;
-
-                                    let updated_filtered_indices = model.filtered_indices();
-                                    model.ensure_cursor_in_range(updated_filtered_indices.len());
-                                }
-                            }
-                            KeyCode::Char('v') => {
-                                model.toggle_view();
-                                let filtered_indices = model.filtered_indices();
-                                model.ensure_cursor_in_range(filtered_indices.len());
-                            }
-                            KeyCode::Char('s') => {
-                                if active_job.is_some() {
-                                    continue;
-                                }
-
-                                active_job = Some(BackgroundJob::FullSync);
-                                spawn_full_sync(repo.clone(), tx.clone());
-                            }
-                            KeyCode::Char('r') => {
-                                if active_job.is_some() {
-                                    continue;
-                                }
-
-                                active_job = Some(BackgroundJob::QuickRefresh);
-                                spawn_quick_refresh(repo.clone(), tx.clone());
-                            }
-                            KeyCode::Char('t') => {
-                                if active_job.is_none() {
-                                    model.screen = Screen::AuthorsFromTeams;
-                                    model.authors_screen = AuthorsScreenState::new();
-                                    active_job = Some(BackgroundJob::TeamsFetch);
-                                    spawn_teams_fetch(repo.clone(), tx.clone());
-                                }
-                            }
-                            _ => {}
                         }
-                    }
+                        KeyCode::Down | KeyCode::Char('j') => {
+                            let filtered_indices = model.filtered_indices();
+                            model.ensure_cursor_in_range(filtered_indices.len());
+                            if model.cursor + 1 < filtered_indices.len() {
+                                model.cursor += 1;
+                            }
+                        }
+                        KeyCode::Enter | KeyCode::Char(' ') => {
+                            let filtered_indices = model.filtered_indices();
+                            model.ensure_cursor_in_range(filtered_indices.len());
+                            if let Some(pr_index) = model.selected_index(&filtered_indices) {
+                                let pr = &model.prs[pr_index];
+                                let _ = open::that(pr.url());
+                            }
+                        }
+                        KeyCode::Char('a') => {
+                            let filtered_indices = model.filtered_indices();
+                            model.ensure_cursor_in_range(filtered_indices.len());
+                            if let Some(pr_index) = model.selected_index(&filtered_indices) {
+                                let mut pr = model.prs[pr_index].clone();
+                                pr.last_acknowledged_at = Some(Utc::now());
+                                repo.save_pr(&pr).await?;
+                                model.prs[pr_index] = pr;
+
+                                let updated_filtered_indices = model.filtered_indices();
+                                model.ensure_cursor_in_range(updated_filtered_indices.len());
+                            }
+                        }
+                        KeyCode::Char('v') => {
+                            model.toggle_view();
+                            let filtered_indices = model.filtered_indices();
+                            model.ensure_cursor_in_range(filtered_indices.len());
+                        }
+                        KeyCode::Char('s') => {
+                            if active_job.is_some() {
+                                continue;
+                            }
+
+                            active_job = Some(BackgroundJob::FullSync);
+                            spawn_full_sync(repo.clone(), tx.clone());
+                        }
+                        KeyCode::Char('r') => {
+                            if active_job.is_some() {
+                                continue;
+                            }
+
+                            active_job = Some(BackgroundJob::QuickRefresh);
+                            spawn_quick_refresh(repo.clone(), tx.clone());
+                        }
+                        KeyCode::Char('t') => {
+                            if active_job.is_none() {
+                                model.screen = Screen::AuthorsFromTeams;
+                                model.authors_screen = AuthorsScreenState::new();
+                                active_job = Some(BackgroundJob::TeamsFetch);
+                                spawn_teams_fetch(repo.clone(), tx.clone());
+                            }
+                        }
+                        _ => {}
+                    },
                     Screen::AuthorsFromTeams => {
                         if model.authors_screen.loading {
                             if key.code == KeyCode::Esc || key.code == KeyCode::Char('q') {
@@ -373,11 +371,10 @@ async fn run_tui_inner(
                                     }
                                 }
                                 KeyCode::Tab => {
-                                    model.authors_screen.focus =
-                                        match model.authors_screen.focus {
-                                            AuthorsPane::Tracked => AuthorsPane::Untracked,
-                                            AuthorsPane::Untracked => AuthorsPane::Tracked,
-                                        };
+                                    model.authors_screen.focus = match model.authors_screen.focus {
+                                        AuthorsPane::Tracked => AuthorsPane::Untracked,
+                                        AuthorsPane::Untracked => AuthorsPane::Tracked,
+                                    };
                                 }
                                 KeyCode::Up | KeyCode::Char('k') => {
                                     let cursor = match model.authors_screen.focus {
@@ -394,12 +391,14 @@ async fn run_tui_inner(
                                 }
                                 KeyCode::Down | KeyCode::Char('j') => {
                                     let filtered_len = match model.authors_screen.focus {
-                                        AuthorsPane::Tracked => {
-                                            model.authors_screen.filtered_list(&model.authors_screen.tracked).len()
-                                        }
-                                        AuthorsPane::Untracked => {
-                                            model.authors_screen.filtered_list(&model.authors_screen.untracked).len()
-                                        }
+                                        AuthorsPane::Tracked => model
+                                            .authors_screen
+                                            .filtered_list(&model.authors_screen.tracked)
+                                            .len(),
+                                        AuthorsPane::Untracked => model
+                                            .authors_screen
+                                            .filtered_list(&model.authors_screen.untracked)
+                                            .len(),
                                     };
                                     let cursor = match model.authors_screen.focus {
                                         AuthorsPane::Tracked => {
@@ -416,10 +415,13 @@ async fn run_tui_inner(
                                 KeyCode::Enter | KeyCode::Char(' ') => {
                                     match model.authors_screen.focus {
                                         AuthorsPane::Untracked => {
-                                            let filtered = model.authors_screen.filtered_list(&model.authors_screen.untracked);
+                                            let filtered = model
+                                                .authors_screen
+                                                .filtered_list(&model.authors_screen.untracked);
                                             let cursor = model.authors_screen.untracked_cursor;
                                             if let Some(&(orig_idx, _)) = filtered.get(cursor) {
-                                                let login = model.authors_screen.untracked.remove(orig_idx);
+                                                let login =
+                                                    model.authors_screen.untracked.remove(orig_idx);
                                                 repo.save_tracked_author(&login).await?;
                                                 model.authors_screen.tracked.push(login);
                                                 model.authors_screen.tracked.sort();
@@ -428,10 +430,13 @@ async fn run_tui_inner(
                                             }
                                         }
                                         AuthorsPane::Tracked => {
-                                            let filtered = model.authors_screen.filtered_list(&model.authors_screen.tracked);
+                                            let filtered = model
+                                                .authors_screen
+                                                .filtered_list(&model.authors_screen.tracked);
                                             let cursor = model.authors_screen.tracked_cursor;
                                             if let Some(&(orig_idx, _)) = filtered.get(cursor) {
-                                                let login = model.authors_screen.tracked.remove(orig_idx);
+                                                let login =
+                                                    model.authors_screen.tracked.remove(orig_idx);
                                                 repo.delete_tracked_author(&login).await?;
                                                 model.authors_screen.untracked.push(login);
                                                 model.authors_screen.untracked.sort();
@@ -618,10 +623,10 @@ fn draw_authors_screen(
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(3),  // header
-            Constraint::Min(1),     // panes
-            Constraint::Length(3),  // search bar
-            Constraint::Length(2),  // footer
+            Constraint::Length(3), // header
+            Constraint::Min(1),    // panes
+            Constraint::Length(3), // search bar
+            Constraint::Length(2), // footer
         ])
         .split(frame.area());
 
@@ -629,7 +634,9 @@ fn draw_authors_screen(
     let header = Paragraph::new(Line::from(vec![
         Span::styled(
             "PR Tracker",
-            Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
+            Style::default()
+                .fg(Color::Cyan)
+                .add_modifier(Modifier::BOLD),
         ),
         Span::raw("  |  "),
         Span::styled("Authors from Teams", Style::default().fg(Color::LightCyan)),
@@ -672,11 +679,17 @@ fn draw_authors_screen(
         let tracked_list = List::new(tracked_items)
             .block(
                 Block::default()
-                    .title(if state.search_query.is_empty() || state.focus != AuthorsPane::Tracked {
-                        format!("Tracked ({})", state.tracked.len())
-                    } else {
-                        format!("Tracked ({}/{})", tracked_filtered.len(), state.tracked.len())
-                    })
+                    .title(
+                        if state.search_query.is_empty() || state.focus != AuthorsPane::Tracked {
+                            format!("Tracked ({})", state.tracked.len())
+                        } else {
+                            format!(
+                                "Tracked ({}/{})",
+                                tracked_filtered.len(),
+                                state.tracked.len()
+                            )
+                        },
+                    )
                     .borders(Borders::ALL)
                     .border_style(tracked_border_style),
             )
@@ -707,11 +720,17 @@ fn draw_authors_screen(
         let untracked_list = List::new(untracked_items)
             .block(
                 Block::default()
-                    .title(if state.search_query.is_empty() || state.focus != AuthorsPane::Untracked {
-                        format!("Not Tracked ({})", state.untracked.len())
-                    } else {
-                        format!("Not Tracked ({}/{})", untracked_filtered.len(), state.untracked.len())
-                    })
+                    .title(
+                        if state.search_query.is_empty() || state.focus != AuthorsPane::Untracked {
+                            format!("Not Tracked ({})", state.untracked.len())
+                        } else {
+                            format!(
+                                "Not Tracked ({}/{})",
+                                untracked_filtered.len(),
+                                state.untracked.len()
+                            )
+                        },
+                    )
                     .borders(Borders::ALL)
                     .border_style(untracked_border_style),
             )
@@ -723,7 +742,9 @@ fn draw_authors_screen(
             .highlight_symbol("▸ ");
         let mut untracked_state = ListState::default();
         if !untracked_filtered.is_empty() && untracked_focused {
-            untracked_state.select(Some(state.untracked_cursor.min(untracked_filtered.len() - 1)));
+            untracked_state.select(Some(
+                state.untracked_cursor.min(untracked_filtered.len() - 1),
+            ));
         }
         frame.render_stateful_widget(untracked_list, panes[1], &mut untracked_state);
     }

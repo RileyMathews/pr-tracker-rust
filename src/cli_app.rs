@@ -153,10 +153,7 @@ async fn handle_authors_from_teams(repo: &DatabaseRepository) -> anyhow::Result<
 
     let current_login_lower = user.username.to_lowercase();
     let already_tracked: Vec<String> = repo.get_tracked_authors().await?;
-    let tracked_lower: HashSet<String> = already_tracked
-        .iter()
-        .map(|s| s.to_lowercase())
-        .collect();
+    let tracked_lower: HashSet<String> = already_tracked.iter().map(|s| s.to_lowercase()).collect();
 
     // Split all_members into already-tracked teammates and new candidates
     let mut tracked_teammates: Vec<String> = Vec::new();
@@ -191,14 +188,11 @@ async fn handle_authors_from_teams(repo: &DatabaseRepository) -> anyhow::Result<
         );
     }
 
-    let selected_logins = match inquire::MultiSelect::new(
-        "Select authors to track:",
-        candidates,
-    )
-    .with_help_message("↑↓ navigate  space select  type to filter  enter confirm  esc cancel")
-    .with_page_size(15)
-    .prompt_skippable()
-    .map_err(|e| anyhow::anyhow!("selection prompt failed: {e}"))?
+    let selected_logins = match inquire::MultiSelect::new("Select authors to track:", candidates)
+        .with_help_message("↑↓ navigate  space select  type to filter  enter confirm  esc cancel")
+        .with_page_size(15)
+        .prompt_skippable()
+        .map_err(|e| anyhow::anyhow!("selection prompt failed: {e}"))?
     {
         Some(logins) if !logins.is_empty() => logins,
         _ => {
@@ -263,7 +257,10 @@ async fn handle_sync(repo: &DatabaseRepository) -> anyhow::Result<()> {
 
     println!(
         "Sync complete: repos={} new={} updated={} deleted={}",
-        summary.synced_repositories, summary.new_prs.len(), summary.updated_prs.len(), summary.deleted_prs.len()
+        summary.synced_repositories,
+        summary.new_prs.len(),
+        summary.updated_prs.len(),
+        summary.deleted_prs.len()
     );
     Ok(())
 }
@@ -290,7 +287,8 @@ fn notify_sync_changes(summary: &SyncRunSummary) -> anyhow::Result<()> {
 
     let body = format!(
         "{} new, {} updated PRs",
-        summary.new_prs.len(), summary.updated_prs.len()
+        summary.new_prs.len(),
+        summary.updated_prs.len()
     );
 
     #[cfg(target_os = "linux")]

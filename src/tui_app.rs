@@ -312,14 +312,6 @@ async fn run_tui_inner(
                             active_job = Some(BackgroundJob::FullSync);
                             spawn_full_sync(repo.clone(), tx.clone());
                         }
-                        KeyCode::Char('r') => {
-                            if active_job.is_some() {
-                                continue;
-                            }
-
-                            active_job = Some(BackgroundJob::FullSync);
-                            spawn_full_sync(repo.clone(), tx.clone());
-                        }
                         KeyCode::Char('t') => {
                             if active_job.is_none() {
                                 model.screen = Screen::AuthorsFromTeams;
@@ -590,7 +582,7 @@ fn draw_pr_list(
     };
 
     let footer = Paragraph::new(format!(
-        "j/k or arrows: move  |  enter/space: open PR  |  a: acknowledge  |  v: toggle view  |  s: full sync  |  r: refresh  |  t: authors from teams  |  q: quit{}",
+        "j/k or arrows: move  |  enter/space: open PR  |  a: acknowledge  |  v: toggle view  |  s: full sync  |  t: authors from teams  |  q: quit{}",
         spinner
     ))
     .block(Block::default().borders(Borders::TOP));

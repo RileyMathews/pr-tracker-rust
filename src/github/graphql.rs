@@ -3,7 +3,7 @@ use serde::Deserialize;
 pub const OPEN_PULL_REQUESTS_QUERY: &str = r#"
 query($owner: String!, $name: String!, $cursor: String) {
   repository(owner: $owner, name: $name) {
-    pullRequests(states: [OPEN], first: 100, after: $cursor) {
+    pullRequests(states: [OPEN], first: 100, after: $cursor, orderBy: {field: UPDATED_AT, direction: DESC}) {
       pageInfo {
         hasNextPage
         endCursor

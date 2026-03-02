@@ -1,10 +1,25 @@
-use chrono::Utc;
+use chrono::{DateTime, Utc};
 
 use crate::core::{process_pull_request_sync_results, SyncDiff};
 use crate::db::DatabaseRepository;
 use crate::github::GitHubClient;
 use crate::models::PullRequest;
 use crate::service;
+
+const DEFAULT_MAX_PR_AGE_DAYS: i64 = 7;
+
+fn pr_age_cutoff() -> Option<DateTime<Utc>> {
+    let days: i64 = std::env::var("PR_TRACKER_MAX_PR_AGE_DAYS")
+        .ok()
+        .and_then(|raw| raw.parse().ok())
+        .unwrap_or(DEFAULT_MAX_PR_AGE_DAYS);
+
+    if days <= 0 {
+        return None; // 0 or negative means no cutoff (fetch all)
+    }
+
+    Some(Utc::now() - chrono::Duration::days(days))
+}
 
 #[derive(Debug, Default)]
 pub struct SyncRunSummary {
@@ -51,6 +66,7 @@ where
 {
     let repositories = repository.get_tracked_repositories().await?;
     let tracked_authors = repository.get_tracked_authors().await?;
+    let cutoff = pr_age_cutoff();
 
     let mut summary = SyncRunSummary::default();
     progress_callback(SyncProgress::FullSyncStarted {
@@ -69,14 +85,28 @@ where
             total_repositories,
         });
         let fresh_prs =
-            service::fetch_tracked_pull_requests(github, &repo_name, &tracked_authors).await?;
+            service::fetch_tracked_pull_requests(github, &repo_name, &tracked_authors, cutoff)
+                .await?;
         let existing_prs = repository.get_prs_by_repository(&repo_name).await?;
+
+        // When using a cutoff, only consider recently-updated existing PRs as
+        // candidates for removal. PRs older than the cutoff were never fetched,
+        // so their absence doesn't mean they were closed.
+        let existing_prs_for_diff = if let Some(cutoff) = cutoff {
+            existing_prs
+                .iter()
+                .filter(|pr| pr.updated_at >= cutoff)
+                .cloned()
+                .collect::<Vec<_>>()
+        } else {
+            existing_prs
+        };
 
         let SyncDiff {
             new_prs,
             updated_prs,
             removed_prs,
-        } = process_pull_request_sync_results(&existing_prs, &fresh_prs, Utc::now());
+        } = process_pull_request_sync_results(&existing_prs_for_diff, &fresh_prs, Utc::now());
 
         for pr in &new_prs {
             repository.save_pr(pr).await?;

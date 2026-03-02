@@ -8,8 +8,11 @@ pub async fn fetch_tracked_pull_requests(
     github: &GitHubClient,
     repo_name: &str,
     authors_to_track: &[String],
+    updated_after: Option<DateTime<Utc>>,
 ) -> anyhow::Result<Vec<PullRequest>> {
-    let prs = github.fetch_open_pull_requests_graphql(repo_name).await?;
+    let prs = github
+        .fetch_open_pull_requests_graphql(repo_name, updated_after)
+        .await?;
 
     let mut result = Vec::new();
     for pr in &prs {

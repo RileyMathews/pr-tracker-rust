@@ -1,5 +1,6 @@
 use std::fmt::Display;
 
+use chrono::{DateTime, Utc};
 use reqwest::header::{HeaderMap, HeaderValue, ACCEPT, AUTHORIZATION, USER_AGENT};
 use serde::de::DeserializeOwned;
 
@@ -95,6 +96,7 @@ impl GitHubClient {
     pub async fn fetch_open_pull_requests_graphql(
         &self,
         repo_name: &str,
+        updated_after: Option<DateTime<Utc>>,
     ) -> anyhow::Result<Vec<graphql::PullRequestNode>> {
         ensure_not_blank("repo name", repo_name)?;
 
@@ -123,7 +125,26 @@ impl GitHubClient {
                 anyhow::anyhow!("repository '{}' not found or not accessible", repo_name)
             })?;
             let pull_requests = repo.pull_requests;
-            all_nodes.extend(pull_requests.nodes);
+
+            if let Some(cutoff) = updated_after {
+                // Results are ordered by updatedAt DESC. Check if we've hit the cutoff.
+                let mut hit_cutoff = false;
+                for node in pull_requests.nodes {
+                    let updated_at = DateTime::parse_from_rfc3339(&node.updated_at)
+                        .map(|dt| dt.with_timezone(&Utc))
+                        .unwrap_or(DateTime::<Utc>::MIN_UTC);
+                    if updated_at < cutoff {
+                        hit_cutoff = true;
+                        break;
+                    }
+                    all_nodes.push(node);
+                }
+                if hit_cutoff {
+                    break;
+                }
+            } else {
+                all_nodes.extend(pull_requests.nodes);
+            }
 
             if pull_requests.page_info.has_next_page {
                 cursor = pull_requests.page_info.end_cursor;

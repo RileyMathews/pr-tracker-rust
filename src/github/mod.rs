@@ -159,6 +159,125 @@ impl GitHubClient {
         Ok(all_nodes)
     }
 
+    pub async fn fetch_discovery_pull_requests_graphql(
+        &self,
+        repo_name: &str,
+        updated_after: Option<DateTime<Utc>>,
+    ) -> anyhow::Result<Vec<graphql::DiscoveryPullRequestNode>> {
+        ensure_not_blank("repo name", repo_name)?;
+
+        let parts: Vec<&str> = repo_name.split('/').collect();
+        if parts.len() != 2 {
+            anyhow::bail!("invalid repo name format, expected 'owner/name': {repo_name}");
+        }
+        let owner = parts[0];
+        let name = parts[1];
+
+        let mut all_nodes = Vec::new();
+        let mut cursor: Option<String> = None;
+
+        loop {
+            let variables = serde_json::json!({
+                "owner": owner,
+                "name": name,
+                "cursor": cursor,
+            });
+
+            let response: graphql::DiscoveryQueryResponse = self
+                .post_graphql(graphql::DISCOVERY_PULL_REQUESTS_QUERY, variables)
+                .await?;
+
+            let repo = response.repository.ok_or_else(|| {
+                anyhow::anyhow!("repository '{}' not found or not accessible", repo_name)
+            })?;
+            let pull_requests = repo.pull_requests;
+
+            if let Some(cutoff) = updated_after {
+                let mut hit_cutoff = false;
+                for node in pull_requests.nodes {
+                    let updated_at = DateTime::parse_from_rfc3339(&node.updated_at)
+                        .map(|dt| dt.with_timezone(&Utc))
+                        .unwrap_or(DateTime::<Utc>::MIN_UTC);
+                    if updated_at < cutoff {
+                        hit_cutoff = true;
+                        break;
+                    }
+                    all_nodes.push(node);
+                }
+                if hit_cutoff {
+                    break;
+                }
+            } else {
+                all_nodes.extend(pull_requests.nodes);
+            }
+
+            if pull_requests.page_info.has_next_page {
+                cursor = pull_requests.page_info.end_cursor;
+                if cursor.is_none() {
+                    break;
+                }
+            } else {
+                break;
+            }
+        }
+
+        Ok(all_nodes)
+    }
+
+    pub async fn fetch_pull_requests_by_number(
+        &self,
+        repo_name: &str,
+        pr_numbers: &[i64],
+    ) -> anyhow::Result<Vec<(i64, Option<graphql::PullRequestNode>)>> {
+        if pr_numbers.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        ensure_not_blank("repo name", repo_name)?;
+
+        let parts: Vec<&str> = repo_name.split('/').collect();
+        if parts.len() != 2 {
+            anyhow::bail!("invalid repo name format, expected 'owner/name': {repo_name}");
+        }
+        let owner = parts[0];
+        let name = parts[1];
+
+        let mut results = Vec::new();
+
+        for chunk in pr_numbers.chunks(10) {
+            let query = graphql::build_targeted_refresh_query(chunk);
+            let variables = serde_json::json!({
+                "owner": owner,
+                "name": name,
+            });
+
+            let response: serde_json::Value = self.post_graphql(&query, variables).await?;
+
+            let repo_data = response.get("repository").ok_or_else(|| {
+                anyhow::anyhow!("repository '{}' not found or not accessible", repo_name)
+            })?;
+
+            for &number in chunk {
+                let alias = format!("pr_{number}");
+                let Some(pr_value) = repo_data.get(&alias) else {
+                    results.push((number, None));
+                    continue;
+                };
+                if pr_value.is_null() {
+                    results.push((number, None));
+                    continue;
+                }
+                let node: graphql::PullRequestNode = serde_json::from_value(pr_value.clone())
+                    .map_err(|err| {
+                        anyhow::anyhow!("error decoding PR #{number} from targeted refresh: {err}")
+                    })?;
+                results.push((number, Some(node)));
+            }
+        }
+
+        Ok(results)
+    }
+
     async fn post_graphql<T: DeserializeOwned>(
         &self,
         query: &str,

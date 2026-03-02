@@ -116,6 +116,12 @@ impl PullRequest {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TrackedRepository {
+    pub repository: String,
+    pub last_synced_at: Option<DateTime<Utc>>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct User {
     pub access_token: String,
     pub username: String,

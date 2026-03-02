@@ -4,7 +4,7 @@ use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
 use sqlx::{FromRow, Row, SqlitePool};
 use std::str::FromStr;
 
-use crate::models::{CiStatus, PullRequest, User};
+use crate::models::{CiStatus, PullRequest, TrackedRepository, User};
 
 pub static MIGRATOR: Migrator = sqlx::migrate!("./migrations");
 
@@ -195,13 +195,21 @@ impl DatabaseRepository {
         Ok(())
     }
 
-    pub async fn get_tracked_repositories(&self) -> anyhow::Result<Vec<String>> {
-        let rows = sqlx::query("SELECT repository FROM tracked_repositories")
+    pub async fn get_tracked_repositories(&self) -> anyhow::Result<Vec<TrackedRepository>> {
+        let rows = sqlx::query("SELECT repository, last_synced_at_unix FROM tracked_repositories")
             .fetch_all(&self.pool)
             .await?;
         Ok(rows
             .into_iter()
-            .map(|row| row.get::<String, _>("repository"))
+            .map(|row| {
+                let repository: String = row.get("repository");
+                let last_synced_at_unix: Option<i64> = row.get("last_synced_at_unix");
+                TrackedRepository {
+                    repository,
+                    last_synced_at: last_synced_at_unix
+                        .and_then(|ts| DateTime::from_timestamp(ts, 0)),
+                }
+            })
             .collect())
     }
 
@@ -218,6 +226,21 @@ impl DatabaseRepository {
             .bind(repo)
             .execute(&self.pool)
             .await?;
+        Ok(())
+    }
+
+    pub async fn update_tracked_repository_last_synced_at(
+        &self,
+        repo: &str,
+        last_synced_at: DateTime<Utc>,
+    ) -> anyhow::Result<()> {
+        sqlx::query(
+            "UPDATE tracked_repositories SET last_synced_at_unix = ?1 WHERE repository = ?2",
+        )
+        .bind(last_synced_at.timestamp())
+        .bind(repo)
+        .execute(&self.pool)
+        .await?;
         Ok(())
     }
 }

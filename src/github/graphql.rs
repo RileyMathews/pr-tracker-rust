@@ -89,6 +89,8 @@ pub struct PullRequestNode {
     pub created_at: String,
     #[serde(rename = "updatedAt")]
     pub updated_at: String,
+    #[serde(default)]
+    pub state: Option<String>,
     pub author: Option<Author>,
     #[serde(rename = "reviewRequests")]
     pub review_requests: ReviewRequestConnection,
@@ -165,4 +167,149 @@ pub struct ReviewConnection {
 pub struct ReviewNode {
     #[serde(rename = "updatedAt")]
     pub updated_at: String,
+}
+
+pub const DISCOVERY_PULL_REQUESTS_QUERY: &str = r#"
+query($owner: String!, $name: String!, $cursor: String) {
+  repository(owner: $owner, name: $name) {
+    pullRequests(states: [OPEN], first: 100, after: $cursor, orderBy: {field: UPDATED_AT, direction: DESC}) {
+      pageInfo {
+        hasNextPage
+        endCursor
+      }
+      nodes {
+        number
+        updatedAt
+        author {
+          login
+        }
+      }
+    }
+  }
+}
+"#;
+
+#[derive(Debug, Deserialize)]
+pub struct DiscoveryQueryResponse {
+    pub repository: Option<DiscoveryRepository>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct DiscoveryRepository {
+    #[serde(rename = "pullRequests")]
+    pub pull_requests: DiscoveryPullRequestConnection,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct DiscoveryPullRequestConnection {
+    #[serde(rename = "pageInfo")]
+    pub page_info: PageInfo,
+    #[serde(default)]
+    pub nodes: Vec<DiscoveryPullRequestNode>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct DiscoveryPullRequestNode {
+    pub number: i64,
+    #[serde(rename = "updatedAt")]
+    pub updated_at: String,
+    pub author: Option<Author>,
+}
+
+pub fn build_targeted_refresh_query(pr_numbers: &[i64]) -> String {
+    let mut fields = String::new();
+    for &number in pr_numbers.iter().filter(|&&n| n > 0) {
+        use std::fmt::Write;
+        write!(
+            fields,
+            r#"
+    pr_{number}: pullRequest(number: {number}) {{
+      number
+      title
+      isDraft
+      createdAt
+      updatedAt
+      headRefOid
+      state
+      author {{
+        login
+      }}
+      reviewRequests(first: 100) {{
+        nodes {{
+          requestedReviewer {{
+            ... on User {{
+              login
+            }}
+          }}
+        }}
+      }}
+      commits(last: 1) {{
+        nodes {{
+          commit {{
+            statusCheckRollup {{
+              state
+            }}
+          }}
+        }}
+      }}
+      comments(last: 100) {{
+        nodes {{
+          updatedAt
+        }}
+      }}
+      reviews(last: 100) {{
+        nodes {{
+          updatedAt
+        }}
+      }}
+    }}"#,
+        )
+        .unwrap();
+    }
+
+    format!(
+        r#"query($owner: String!, $name: String!) {{
+  repository(owner: $owner, name: $name) {{{fields}
+  }}
+}}"#
+    )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn build_targeted_refresh_query_single_pr() {
+        let query = build_targeted_refresh_query(&[42]);
+        assert!(query.contains("pr_42: pullRequest(number: 42)"));
+        assert!(query.contains("state"));
+        assert!(query.contains("statusCheckRollup"));
+        assert!(query.contains("$owner: String!"));
+        assert!(query.contains("$name: String!"));
+    }
+
+    #[test]
+    fn build_targeted_refresh_query_multiple_prs() {
+        let query = build_targeted_refresh_query(&[1, 2, 3]);
+        assert!(query.contains("pr_1: pullRequest(number: 1)"));
+        assert!(query.contains("pr_2: pullRequest(number: 2)"));
+        assert!(query.contains("pr_3: pullRequest(number: 3)"));
+    }
+
+    #[test]
+    fn build_targeted_refresh_query_empty() {
+        let query = build_targeted_refresh_query(&[]);
+        // Should still be a valid query structure, just with no PR fields
+        assert!(query.contains("repository(owner: $owner, name: $name)"));
+        assert!(!query.contains("pullRequest"));
+    }
+
+    #[test]
+    fn build_targeted_refresh_query_filters_non_positive() {
+        let query = build_targeted_refresh_query(&[-1, 0, 5]);
+        assert!(!query.contains("pr_-1"));
+        assert!(!query.contains("pr_0"));
+        assert!(query.contains("pr_5: pullRequest(number: 5)"));
+    }
 }

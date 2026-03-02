@@ -1,3 +1,5 @@
+use std::collections::HashSet;
+
 use chrono::{DateTime, Utc};
 
 use crate::github::graphql;
@@ -31,6 +33,28 @@ pub async fn fetch_tracked_pull_requests(
     }
 
     Ok(result)
+}
+
+pub async fn discover_new_pull_requests(
+    github: &GitHubClient,
+    repo_name: &str,
+    authors_to_track: &[String],
+    known_pr_numbers: &[i64],
+    updated_after: Option<DateTime<Utc>>,
+) -> anyhow::Result<(Vec<i64>, Option<DateTime<Utc>>)> {
+    let prs = github
+        .fetch_discovery_pull_requests_graphql(repo_name, updated_after)
+        .await?;
+
+    let max_updated_at = prs
+        .iter()
+        .filter_map(|pr| parse_github_timestamp(&pr.updated_at).ok())
+        .max();
+
+    let known: HashSet<i64> = known_pr_numbers.iter().copied().collect();
+    let new_pr_numbers = filter_new_prs(&prs, authors_to_track, &known);
+
+    Ok((new_pr_numbers, max_updated_at))
 }
 
 fn graphql_pr_to_model(
@@ -115,4 +139,121 @@ fn parse_github_timestamp(value: &str) -> anyhow::Result<DateTime<Utc>> {
 
 fn parse_optional_timestamp(value: Option<&str>) -> Option<DateTime<Utc>> {
     value.and_then(|raw| parse_github_timestamp(raw).ok())
+}
+
+fn filter_new_prs(
+    prs: &[graphql::DiscoveryPullRequestNode],
+    authors_to_track: &[String],
+    known_pr_numbers: &HashSet<i64>,
+) -> Vec<i64> {
+    prs.iter()
+        .filter(|pr| {
+            let author = pr
+                .author
+                .as_ref()
+                .map(|a| a.login.as_str())
+                .unwrap_or_default();
+            authors_to_track.iter().any(|tracked| tracked == author)
+                && !known_pr_numbers.contains(&pr.number)
+        })
+        .map(|pr| pr.number)
+        .collect()
+}
+
+pub async fn fetch_pull_requests_by_number(
+    github: &GitHubClient,
+    repo_name: &str,
+    pr_numbers: &[i64],
+) -> anyhow::Result<(Vec<PullRequest>, Vec<i64>)> {
+    let results = github
+        .fetch_pull_requests_by_number(repo_name, pr_numbers)
+        .await?;
+
+    let mut open_prs = Vec::new();
+    let mut closed_pr_numbers = Vec::new();
+
+    for (number, maybe_node) in results {
+        match maybe_node {
+            Some(ref node) if node.state.as_deref() == Some("OPEN") => {
+                let model = graphql_pr_to_model(repo_name, node)?;
+                open_prs.push(model);
+            }
+            _ => {
+                closed_pr_numbers.push(number);
+            }
+        }
+    }
+
+    Ok((open_prs, closed_pr_numbers))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::github::graphql::{Author, DiscoveryPullRequestNode};
+
+    fn discovery_pr(number: i64, author: Option<&str>) -> DiscoveryPullRequestNode {
+        DiscoveryPullRequestNode {
+            number,
+            updated_at: "2025-06-15T00:00:00Z".to_string(),
+            author: author.map(|login| Author {
+                login: login.to_string(),
+            }),
+        }
+    }
+
+    #[test]
+    fn filter_new_prs_includes_tracked_author_unknown_pr() {
+        let prs = vec![discovery_pr(42, Some("alice"))];
+        let authors = vec!["alice".to_string()];
+        let known = HashSet::new();
+
+        let result = filter_new_prs(&prs, &authors, &known);
+        assert_eq!(result, vec![42]);
+    }
+
+    #[test]
+    fn filter_new_prs_excludes_untracked_author() {
+        let prs = vec![discovery_pr(42, Some("bob"))];
+        let authors = vec!["alice".to_string()];
+        let known = HashSet::new();
+
+        let result = filter_new_prs(&prs, &authors, &known);
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn filter_new_prs_excludes_known_pr() {
+        let prs = vec![discovery_pr(42, Some("alice"))];
+        let authors = vec!["alice".to_string()];
+        let known: HashSet<i64> = [42].into_iter().collect();
+
+        let result = filter_new_prs(&prs, &authors, &known);
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn filter_new_prs_excludes_pr_with_no_author() {
+        let prs = vec![discovery_pr(42, None)];
+        let authors = vec!["alice".to_string()];
+        let known = HashSet::new();
+
+        let result = filter_new_prs(&prs, &authors, &known);
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn filter_new_prs_mixed() {
+        let prs = vec![
+            discovery_pr(1, Some("alice")), // tracked, new
+            discovery_pr(2, Some("bob")),   // untracked
+            discovery_pr(3, Some("alice")), // tracked, but known
+            discovery_pr(4, Some("carol")), // tracked, new
+        ];
+        let authors = vec!["alice".to_string(), "carol".to_string()];
+        let known: HashSet<i64> = [3].into_iter().collect();
+
+        let result = filter_new_prs(&prs, &authors, &known);
+        assert_eq!(result, vec![1, 4]);
+    }
 }

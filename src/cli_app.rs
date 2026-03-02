@@ -216,8 +216,8 @@ async fn handle_repositories(
         RepositoryCommand::List => {
             let repositories = repo.get_tracked_repositories().await?;
             println!("Repositories:");
-            for repository in repositories {
-                println!("- {}", repository);
+            for tracked_repo in repositories {
+                println!("- {}", tracked_repo.repository);
             }
         }
         RepositoryCommand::Add { repository } => {

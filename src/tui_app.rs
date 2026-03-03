@@ -19,10 +19,12 @@ use tokio::sync::mpsc;
 use crate::db::DatabaseRepository;
 use crate::github::GitHubClient;
 use crate::models::{CiStatus, PullRequest};
+use crate::scoring;
 use crate::sync::{sync_all_tracked_with_progress, SyncRunSummary};
 
 struct Model {
     prs: Vec<PullRequest>,
+    username: String,
     cursor: usize,
     view_mode: ViewMode,
     screen: Screen,
@@ -124,9 +126,10 @@ impl AuthorsScreenState {
 }
 
 impl Model {
-    fn new(prs: Vec<PullRequest>) -> Self {
+    fn new(prs: Vec<PullRequest>, username: String) -> Self {
         Self {
             prs,
+            username,
             cursor: 0,
             view_mode: ViewMode::Active,
             screen: Screen::PrList,
@@ -135,7 +138,8 @@ impl Model {
     }
 
     fn filtered_indices(&self) -> Vec<usize> {
-        self.prs
+        let mut indices: Vec<usize> = self
+            .prs
             .iter()
             .enumerate()
             .filter_map(|(index, pr)| {
@@ -150,7 +154,21 @@ impl Model {
                     None
                 }
             })
-            .collect()
+            .collect();
+
+        indices.sort_by(|&a, &b| {
+            let score_a = scoring::importance_score(&self.prs[a], &self.username);
+            let score_b = scoring::importance_score(&self.prs[b], &self.username);
+            let pr_a = &self.prs[a];
+            let pr_b = &self.prs[b];
+            score_b
+                .cmp(&score_a)
+                .then(pr_b.updated_at.cmp(&pr_a.updated_at))
+                .then(pr_a.repository.cmp(&pr_b.repository))
+                .then(pr_a.number.cmp(&pr_b.number))
+        });
+
+        indices
     }
 
     fn selected_index(&self, filtered_indices: &[usize]) -> Option<usize> {
@@ -190,7 +208,12 @@ pub async fn run() -> anyhow::Result<()> {
     repo.apply_migrations().await?;
 
     let prs = repo.get_all_prs().await?;
-    run_tui(Model::new(prs), &repo).await
+    let username = repo
+        .get_user()
+        .await?
+        .map(|u| u.username)
+        .unwrap_or_default();
+    run_tui(Model::new(prs, username), &repo).await
 }
 
 async fn run_tui(mut model: Model, repo: &DatabaseRepository) -> anyhow::Result<()> {

@@ -4,7 +4,7 @@ use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
 use sqlx::{FromRow, Row, SqlitePool};
 use std::str::FromStr;
 
-use crate::models::{CiStatus, PullRequest, TrackedRepository, User};
+use crate::models::{ApprovalStatus, CiStatus, PullRequest, TrackedRepository, User};
 
 pub static MIGRATOR: Migrator = sqlx::migrate!("./migrations");
 
@@ -32,8 +32,9 @@ impl DatabaseRepository {
             INSERT INTO pull_requests (
               number, title, repository, author, head_sha, draft, created_at_unix,
               updated_at_unix, ci_status, last_comment_unix, last_commit_unix,
-              last_ci_status_update_unix, last_acknowledged_unix, requested_reviewers
-            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)
+              last_ci_status_update_unix, last_acknowledged_unix, requested_reviewers,
+              approval_status, last_review_status_update_unix
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)
             ON CONFLICT(repository, number) DO UPDATE SET
               title = excluded.title,
               repository = excluded.repository,
@@ -46,7 +47,9 @@ impl DatabaseRepository {
               last_commit_unix = excluded.last_commit_unix,
               last_ci_status_update_unix = excluded.last_ci_status_update_unix,
               last_acknowledged_unix = excluded.last_acknowledged_unix,
-              requested_reviewers = excluded.requested_reviewers
+              requested_reviewers = excluded.requested_reviewers,
+              approval_status = excluded.approval_status,
+              last_review_status_update_unix = excluded.last_review_status_update_unix
             "#,
         )
         .bind(pr.number)
@@ -63,6 +66,8 @@ impl DatabaseRepository {
         .bind(pr.last_ci_status_update_at.timestamp())
         .bind(pr.last_acknowledged_at.map(|t| t.timestamp()))
         .bind(reviewers_json)
+        .bind(pr.approval_status.as_i64())
+        .bind(pr.last_review_status_update_at.timestamp())
         .execute(&self.pool)
         .await?;
 
@@ -83,7 +88,8 @@ impl DatabaseRepository {
             r#"
             SELECT number, title, repository, author, head_sha, draft, created_at_unix,
                    updated_at_unix, ci_status, last_comment_unix, last_commit_unix,
-                   last_ci_status_update_unix, last_acknowledged_unix, requested_reviewers
+                   last_ci_status_update_unix, last_acknowledged_unix, requested_reviewers,
+                   approval_status, last_review_status_update_unix
             FROM pull_requests
             WHERE repository = ?1
             "#,
@@ -100,7 +106,8 @@ impl DatabaseRepository {
             r#"
             SELECT number, title, repository, author, head_sha, draft, created_at_unix,
                    updated_at_unix, ci_status, last_comment_unix, last_commit_unix,
-                   last_ci_status_update_unix, last_acknowledged_unix, requested_reviewers
+                   last_ci_status_update_unix, last_acknowledged_unix, requested_reviewers,
+                   approval_status, last_review_status_update_unix
             FROM pull_requests
             "#,
         )
@@ -143,7 +150,8 @@ impl DatabaseRepository {
             r#"
             SELECT number, title, repository, author, head_sha, draft, created_at_unix,
                    updated_at_unix, ci_status, last_comment_unix, last_commit_unix,
-                   last_ci_status_update_unix, last_acknowledged_unix, requested_reviewers
+                   last_ci_status_update_unix, last_acknowledged_unix, requested_reviewers,
+                   approval_status, last_review_status_update_unix
             FROM pull_requests
             WHERE repository = ?1 AND number = ?2
             LIMIT 1
@@ -261,6 +269,8 @@ struct PullRequestRow {
     last_ci_status_update_unix: i64,
     last_acknowledged_unix: Option<i64>,
     requested_reviewers: String,
+    approval_status: i64,
+    last_review_status_update_unix: i64,
 }
 
 impl PullRequestRow {
@@ -281,6 +291,8 @@ impl PullRequestRow {
             last_comment_at: unix_to_datetime(self.last_comment_unix)?,
             last_commit_at: unix_to_datetime(self.last_commit_unix)?,
             last_ci_status_update_at: unix_to_datetime(self.last_ci_status_update_unix)?,
+            approval_status: ApprovalStatus::from_i64(self.approval_status),
+            last_review_status_update_at: unix_to_datetime(self.last_review_status_update_unix)?,
             last_acknowledged_at: self
                 .last_acknowledged_unix
                 .map(unix_to_datetime)

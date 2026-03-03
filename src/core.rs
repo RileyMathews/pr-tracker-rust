@@ -30,14 +30,20 @@ pub fn process_pull_request_sync_results(
             continue;
         };
 
-        let (ci_status_changed, has_relevant_changes) =
+        let (ci_status_changed, approval_status_changed, has_relevant_changes) =
             pull_request_has_relevant_changes(existing_pr, incoming_pr);
         if !has_relevant_changes {
             continue;
         }
 
         let mut updated = incoming_pr.clone();
-        apply_sync_metadata(existing_pr, &mut updated, ci_status_changed, now);
+        apply_sync_metadata(
+            existing_pr,
+            &mut updated,
+            ci_status_changed,
+            approval_status_changed,
+            now,
+        );
         diff.updated_prs.push(updated);
     }
 
@@ -58,14 +64,16 @@ fn index_pull_requests_by_key(prs: &[PullRequest]) -> HashMap<String, PullReques
 fn pull_request_has_relevant_changes(
     existing_pr: &PullRequest,
     incoming_pr: &PullRequest,
-) -> (bool, bool) {
+) -> (bool, bool, bool) {
     let ci_status_changed = existing_pr.ci_status != incoming_pr.ci_status;
     let last_comment_changed = existing_pr.last_comment_at != incoming_pr.last_comment_at;
     let head_sha_changed = existing_pr.head_sha != incoming_pr.head_sha;
+    let approval_status_changed = existing_pr.approval_status != incoming_pr.approval_status;
 
     (
         ci_status_changed,
-        ci_status_changed || last_comment_changed || head_sha_changed,
+        approval_status_changed,
+        ci_status_changed || last_comment_changed || head_sha_changed || approval_status_changed,
     )
 }
 
@@ -73,6 +81,7 @@ fn apply_sync_metadata(
     existing_pr: &PullRequest,
     incoming_pr: &mut PullRequest,
     ci_status_changed: bool,
+    approval_status_changed: bool,
     now: DateTime<Utc>,
 ) {
     incoming_pr.last_acknowledged_at = existing_pr.last_acknowledged_at;
@@ -85,6 +94,11 @@ fn apply_sync_metadata(
         now
     } else {
         existing_pr.last_ci_status_update_at
+    };
+    incoming_pr.last_review_status_update_at = if approval_status_changed {
+        incoming_pr.last_review_status_update_at
+    } else {
+        existing_pr.last_review_status_update_at
     };
 }
 
@@ -109,7 +123,7 @@ mod tests {
     use chrono::{DateTime, TimeZone, Utc};
 
     use super::process_pull_request_sync_results;
-    use crate::models::{CiStatus, PullRequest};
+    use crate::models::{ApprovalStatus, CiStatus, PullRequest};
 
     fn dt(year: i32, month: u32, day: u32, hour: u32) -> DateTime<Utc> {
         Utc.with_ymd_and_hms(year, month, day, hour, 0, 0)
@@ -131,6 +145,8 @@ mod tests {
             last_comment_at: DateTime::UNIX_EPOCH,
             last_commit_at: DateTime::UNIX_EPOCH,
             last_ci_status_update_at: DateTime::UNIX_EPOCH,
+            approval_status: ApprovalStatus::None,
+            last_review_status_update_at: DateTime::UNIX_EPOCH,
             last_acknowledged_at: None,
             requested_reviewers: Vec::new(),
         }
@@ -284,5 +300,35 @@ mod tests {
         let result = process_pull_request_sync_results(&[db_pr], &[fresh_pr], now);
         assert_eq!(result.updated_prs.len(), 1);
         assert_eq!(result.updated_prs[0].last_commit_at, now);
+    }
+
+    #[test]
+    fn updates_review_status_from_api_timestamp() {
+        let before = dt(2025, 1, 1, 0);
+        let api_review_time = dt(2025, 1, 1, 1);
+        let now = dt(2025, 1, 1, 2);
+
+        let db_pr = PullRequest {
+            approval_status: ApprovalStatus::None,
+            last_review_status_update_at: before,
+            ..empty_pr("acme/repo", 1)
+        };
+        let fresh_pr = PullRequest {
+            approval_status: ApprovalStatus::Approved,
+            last_review_status_update_at: api_review_time,
+            ..empty_pr("acme/repo", 1)
+        };
+
+        let result = process_pull_request_sync_results(&[db_pr], &[fresh_pr], now);
+        assert_eq!(result.updated_prs.len(), 1);
+        // Key assertion: the timestamp comes from the API (api_review_time), not from `now`
+        assert_eq!(
+            result.updated_prs[0].last_review_status_update_at,
+            api_review_time
+        );
+        assert_eq!(
+            result.updated_prs[0].approval_status,
+            ApprovalStatus::Approved
+        );
     }
 }

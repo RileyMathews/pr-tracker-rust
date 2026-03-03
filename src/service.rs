@@ -4,7 +4,7 @@ use chrono::{DateTime, Utc};
 
 use crate::github::graphql;
 use crate::github::GitHubClient;
-use crate::models::{CiStatus, PullRequest};
+use crate::models::{ApprovalStatus, CiStatus, PullRequest};
 
 pub async fn fetch_tracked_pull_requests(
     github: &GitHubClient,
@@ -88,6 +88,8 @@ fn graphql_pr_to_model(
         last_comment_at: latest_comment_time(pr),
         last_commit_at: DateTime::UNIX_EPOCH,
         last_ci_status_update_at: DateTime::UNIX_EPOCH,
+        approval_status: map_approval_status(pr),
+        last_review_status_update_at: latest_review_submitted_at(pr),
         last_acknowledged_at: None,
         requested_reviewers,
     })
@@ -108,6 +110,31 @@ fn map_ci_status(pr: &graphql::PullRequestNode) -> CiStatus {
         },
         None => CiStatus::Pending,
     }
+}
+
+fn map_approval_status(pr: &graphql::PullRequestNode) -> ApprovalStatus {
+    let mut has_approved = false;
+    for review in &pr.latest_reviews.nodes {
+        match review.state.as_str() {
+            "CHANGES_REQUESTED" => return ApprovalStatus::ChangesRequested,
+            "APPROVED" => has_approved = true,
+            _ => {}
+        }
+    }
+    if has_approved {
+        ApprovalStatus::Approved
+    } else {
+        ApprovalStatus::None
+    }
+}
+
+fn latest_review_submitted_at(pr: &graphql::PullRequestNode) -> DateTime<Utc> {
+    pr.latest_reviews
+        .nodes
+        .iter()
+        .filter_map(|r| parse_optional_timestamp(r.submitted_at.as_deref()))
+        .max()
+        .unwrap_or(DateTime::UNIX_EPOCH)
 }
 
 fn latest_comment_time(pr: &graphql::PullRequestNode) -> DateTime<Utc> {

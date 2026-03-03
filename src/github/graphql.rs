@@ -46,6 +46,15 @@ query($owner: String!, $name: String!, $cursor: String) {
             updatedAt
           }
         }
+        latestReviews(first: 100) {
+          nodes {
+            state
+            submittedAt
+            author {
+              login
+            }
+          }
+        }
       }
     }
   }
@@ -99,6 +108,8 @@ pub struct PullRequestNode {
     pub commits: CommitConnection,
     pub comments: CommentConnection,
     pub reviews: ReviewConnection,
+    #[serde(rename = "latestReviews")]
+    pub latest_reviews: LatestReviewConnection,
 }
 
 #[derive(Debug, Deserialize)]
@@ -167,6 +178,20 @@ pub struct ReviewConnection {
 pub struct ReviewNode {
     #[serde(rename = "updatedAt")]
     pub updated_at: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct LatestReviewConnection {
+    #[serde(default)]
+    pub nodes: Vec<LatestReviewNode>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct LatestReviewNode {
+    pub state: String,
+    #[serde(rename = "submittedAt")]
+    pub submitted_at: Option<String>,
+    pub author: Option<Author>,
 }
 
 pub const DISCOVERY_PULL_REQUESTS_QUERY: &str = r#"
@@ -260,6 +285,15 @@ pub fn build_targeted_refresh_query(pr_numbers: &[i64]) -> String {
       reviews(last: 100) {{
         nodes {{
           updatedAt
+        }}
+      }}
+      latestReviews(first: 100) {{
+        nodes {{
+          state
+          submittedAt
+          author {{
+            login
+          }}
         }}
       }}
     }}"#,

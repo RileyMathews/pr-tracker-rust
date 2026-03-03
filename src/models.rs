@@ -25,10 +25,36 @@ impl CiStatus {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ApprovalStatus {
+    None,
+    Approved,
+    ChangesRequested,
+}
+
+impl ApprovalStatus {
+    pub fn as_i64(self) -> i64 {
+        match self {
+            Self::None => 0,
+            Self::Approved => 1,
+            Self::ChangesRequested => 2,
+        }
+    }
+
+    pub fn from_i64(value: i64) -> Self {
+        match value {
+            1 => Self::Approved,
+            2 => Self::ChangesRequested,
+            _ => Self::None,
+        }
+    }
+}
+
 pub enum ChangeKind {
     NewComment,
     NewCommit,
     NewCistatus,
+    NewReviewStatus,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -45,6 +71,8 @@ pub struct PullRequest {
     pub last_comment_at: DateTime<Utc>,
     pub last_commit_at: DateTime<Utc>,
     pub last_ci_status_update_at: DateTime<Utc>,
+    pub approval_status: ApprovalStatus,
+    pub last_review_status_update_at: DateTime<Utc>,
     pub last_acknowledged_at: Option<DateTime<Utc>>,
     pub requested_reviewers: Vec<String>,
 }
@@ -58,6 +86,7 @@ impl PullRequest {
         self.last_comment_at <= last_ack
             && self.last_commit_at <= last_ack
             && self.last_ci_status_update_at <= last_ack
+            && self.last_review_status_update_at <= last_ack
     }
 
     pub fn display_string(&self) -> String {
@@ -73,6 +102,7 @@ impl PullRequest {
                 ChangeKind::NewComment,
                 ChangeKind::NewCommit,
                 ChangeKind::NewCistatus,
+                ChangeKind::NewReviewStatus,
             ];
         };
 
@@ -85,6 +115,9 @@ impl PullRequest {
         }
         if self.last_ci_status_update_at > last_ack {
             changes.push(ChangeKind::NewCistatus);
+        }
+        if self.last_review_status_update_at > last_ack {
+            changes.push(ChangeKind::NewReviewStatus);
         }
         changes
     }
@@ -100,6 +133,9 @@ impl PullRequest {
             }
             if self.last_ci_status_update_at > last_ack {
                 updates.push_str("CI Status Changed | ");
+            }
+            if self.last_review_status_update_at > last_ack {
+                updates.push_str("Review Status Changed | ");
             }
             return updates;
         }

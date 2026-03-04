@@ -250,8 +250,10 @@ async fn handle_sync(repo: &DatabaseRepository) -> anyhow::Result<()> {
         return Ok(());
     }
 
+    let username = user.username.clone();
     let github = GitHubClient::new(user.access_token)?.with_request_logging(true);
-    let summary = sync_all_tracked_with_progress(repo, &github, log_sync_progress).await?;
+    let summary =
+        sync_all_tracked_with_progress(repo, &github, &username, log_sync_progress).await?;
 
     let _ = notify_sync_changes(&summary);
 

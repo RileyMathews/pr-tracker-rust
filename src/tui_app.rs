@@ -566,6 +566,7 @@ fn draw_pr_list(
                     } else {
                         Span::raw("")
                     },
+                    review_badge(pr, &model.username),
                 ]),
                 Line::from(Span::styled(
                     pr.updates_since_last_ack(),
@@ -813,9 +814,10 @@ async fn run_full_sync(
     let user = repo.get_user().await?.ok_or_else(|| {
         anyhow::anyhow!("no authenticated user found, run 'cli auth <token>' first")
     })?;
+    let username = user.username.clone();
     let github = GitHubClient::new(user.access_token)?;
 
-    sync_all_tracked_with_progress(&repo, &github, |_| {
+    sync_all_tracked_with_progress(&repo, &github, &username, |_| {
         let _ = tx.send(BackgroundMessage::Progress);
     })
     .await
@@ -893,6 +895,23 @@ fn ci_label(status: CiStatus) -> &'static str {
         CiStatus::Pending => "pending",
         CiStatus::Success => "success",
         CiStatus::Failure => "failure",
+    }
+}
+
+fn review_badge<'a>(pr: &PullRequest, username: &str) -> Span<'a> {
+    if username.is_empty() || pr.author.eq_ignore_ascii_case(username) {
+        return Span::raw("");
+    }
+    let is_requested = pr
+        .requested_reviewers
+        .iter()
+        .any(|r| r.eq_ignore_ascii_case(username));
+    if is_requested {
+        Span::styled("  review requested", Style::default().fg(Color::Yellow))
+    } else if pr.user_has_reviewed {
+        Span::styled("  reviewed", Style::default().fg(Color::Green))
+    } else {
+        Span::raw("")
     }
 }
 

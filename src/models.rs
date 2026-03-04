@@ -75,6 +75,7 @@ pub struct PullRequest {
     pub last_review_status_update_at: DateTime<Utc>,
     pub last_acknowledged_at: Option<DateTime<Utc>>,
     pub requested_reviewers: Vec<String>,
+    pub user_has_reviewed: bool,
 }
 
 impl PullRequest {

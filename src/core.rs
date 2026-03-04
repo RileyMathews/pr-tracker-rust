@@ -69,11 +69,17 @@ fn pull_request_has_relevant_changes(
     let last_comment_changed = existing_pr.last_comment_at != incoming_pr.last_comment_at;
     let head_sha_changed = existing_pr.head_sha != incoming_pr.head_sha;
     let approval_status_changed = existing_pr.approval_status != incoming_pr.approval_status;
+    let review_fields_changed = existing_pr.user_has_reviewed != incoming_pr.user_has_reviewed
+        || existing_pr.requested_reviewers != incoming_pr.requested_reviewers;
 
     (
         ci_status_changed,
         approval_status_changed,
-        ci_status_changed || last_comment_changed || head_sha_changed || approval_status_changed,
+        ci_status_changed
+            || last_comment_changed
+            || head_sha_changed
+            || approval_status_changed
+            || review_fields_changed,
     )
 }
 
@@ -149,6 +155,7 @@ mod tests {
             last_review_status_update_at: DateTime::UNIX_EPOCH,
             last_acknowledged_at: None,
             requested_reviewers: Vec::new(),
+            user_has_reviewed: false,
         }
     }
 

@@ -11,6 +11,7 @@ pub async fn fetch_tracked_pull_requests(
     repo_name: &str,
     authors_to_track: &[String],
     updated_after: Option<DateTime<Utc>>,
+    username: &str,
 ) -> anyhow::Result<Vec<PullRequest>> {
     let prs = github
         .fetch_open_pull_requests_graphql(repo_name, updated_after)
@@ -28,7 +29,7 @@ pub async fn fetch_tracked_pull_requests(
             continue;
         }
 
-        let model = graphql_pr_to_model(repo_name, pr)?;
+        let model = graphql_pr_to_model(repo_name, pr, username)?;
         result.push(model);
     }
 
@@ -60,6 +61,7 @@ pub async fn discover_new_pull_requests(
 fn graphql_pr_to_model(
     repo_name: &str,
     pr: &graphql::PullRequestNode,
+    username: &str,
 ) -> anyhow::Result<PullRequest> {
     let created_at = parse_github_timestamp(&pr.created_at)?;
     let updated_at = parse_github_timestamp(&pr.updated_at)?;
@@ -70,6 +72,14 @@ fn graphql_pr_to_model(
         .iter()
         .filter_map(|rr| rr.requested_reviewer.as_ref()?.login.clone())
         .collect();
+
+    let user_has_reviewed = !username.is_empty()
+        && pr.latest_reviews.nodes.iter().any(|review| {
+            review
+                .author
+                .as_ref()
+                .is_some_and(|a| a.login.eq_ignore_ascii_case(username))
+        });
 
     Ok(PullRequest {
         number: pr.number,
@@ -92,6 +102,7 @@ fn graphql_pr_to_model(
         last_review_status_update_at: latest_review_submitted_at(pr),
         last_acknowledged_at: None,
         requested_reviewers,
+        user_has_reviewed,
     })
 }
 
@@ -191,6 +202,7 @@ pub async fn fetch_pull_requests_by_number(
     github: &GitHubClient,
     repo_name: &str,
     pr_numbers: &[i64],
+    username: &str,
 ) -> anyhow::Result<(Vec<PullRequest>, Vec<i64>)> {
     let results = github
         .fetch_pull_requests_by_number(repo_name, pr_numbers)
@@ -202,7 +214,7 @@ pub async fn fetch_pull_requests_by_number(
     for (number, maybe_node) in results {
         match maybe_node {
             Some(ref node) if node.state.as_deref() == Some("OPEN") => {
-                let model = graphql_pr_to_model(repo_name, node)?;
+                let model = graphql_pr_to_model(repo_name, node, username)?;
                 open_prs.push(model);
             }
             _ => {

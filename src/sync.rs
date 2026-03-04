@@ -80,13 +80,15 @@ struct RepoSyncResult {
 pub async fn sync_all_tracked(
     repository: &DatabaseRepository,
     github: &GitHubClient,
+    username: &str,
 ) -> anyhow::Result<SyncRunSummary> {
-    sync_all_tracked_with_progress(repository, github, |_| {}).await
+    sync_all_tracked_with_progress(repository, github, username, |_| {}).await
 }
 
 pub async fn sync_all_tracked_with_progress<F>(
     repository: &DatabaseRepository,
     github: &GitHubClient,
+    username: &str,
     mut progress_callback: F,
 ) -> anyhow::Result<SyncRunSummary>
 where
@@ -108,6 +110,8 @@ where
     let semaphore = Arc::new(Semaphore::new(MAX_CONCURRENT_REPOS));
     let mut join_set = JoinSet::new();
 
+    let username_owned = username.to_string();
+
     for (index, tracked_repo) in repositories.into_iter().enumerate() {
         progress_callback(SyncProgress::FullSyncRepositoryStarted {
             repository: tracked_repo.repository.clone(),
@@ -119,10 +123,11 @@ where
         let db = repository.clone();
         let gh = github.clone();
         let authors = tracked_authors.clone();
+        let uname = username_owned.clone();
 
         join_set.spawn(async move {
             let _permit = sem.acquire().await.unwrap();
-            sync_single_repo(&db, &gh, &authors, tracked_repo, index + 1).await
+            sync_single_repo(&db, &gh, &authors, tracked_repo, index + 1, &uname).await
         });
     }
 
@@ -151,6 +156,7 @@ async fn sync_single_repo(
     tracked_authors: &[String],
     tracked_repo: TrackedRepository,
     repo_index: usize,
+    username: &str,
 ) -> anyhow::Result<RepoSyncResult> {
     let repo_name = &tracked_repo.repository;
 
@@ -178,7 +184,7 @@ async fn sync_single_repo(
     let (fresh_prs, closed_pr_numbers) = if all_pr_numbers.is_empty() {
         (Vec::new(), Vec::new())
     } else {
-        service::fetch_pull_requests_by_number(github, repo_name, &all_pr_numbers).await?
+        service::fetch_pull_requests_by_number(github, repo_name, &all_pr_numbers, username).await?
     };
 
     // Step 4: Diff & persist

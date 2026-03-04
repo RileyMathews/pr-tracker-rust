@@ -33,8 +33,8 @@ impl DatabaseRepository {
               number, title, repository, author, head_sha, draft, created_at_unix,
               updated_at_unix, ci_status, last_comment_unix, last_commit_unix,
               last_ci_status_update_unix, last_acknowledged_unix, requested_reviewers,
-              approval_status, last_review_status_update_unix
-            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)
+              approval_status, last_review_status_update_unix, user_has_reviewed
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17)
             ON CONFLICT(repository, number) DO UPDATE SET
               title = excluded.title,
               repository = excluded.repository,
@@ -49,7 +49,8 @@ impl DatabaseRepository {
               last_acknowledged_unix = excluded.last_acknowledged_unix,
               requested_reviewers = excluded.requested_reviewers,
               approval_status = excluded.approval_status,
-              last_review_status_update_unix = excluded.last_review_status_update_unix
+              last_review_status_update_unix = excluded.last_review_status_update_unix,
+              user_has_reviewed = excluded.user_has_reviewed
             "#,
         )
         .bind(pr.number)
@@ -68,6 +69,7 @@ impl DatabaseRepository {
         .bind(reviewers_json)
         .bind(pr.approval_status.as_i64())
         .bind(pr.last_review_status_update_at.timestamp())
+        .bind(pr.user_has_reviewed)
         .execute(&self.pool)
         .await?;
 
@@ -89,7 +91,7 @@ impl DatabaseRepository {
             SELECT number, title, repository, author, head_sha, draft, created_at_unix,
                    updated_at_unix, ci_status, last_comment_unix, last_commit_unix,
                    last_ci_status_update_unix, last_acknowledged_unix, requested_reviewers,
-                   approval_status, last_review_status_update_unix
+                   approval_status, last_review_status_update_unix, user_has_reviewed
             FROM pull_requests
             WHERE repository = ?1
             "#,
@@ -107,7 +109,7 @@ impl DatabaseRepository {
             SELECT number, title, repository, author, head_sha, draft, created_at_unix,
                    updated_at_unix, ci_status, last_comment_unix, last_commit_unix,
                    last_ci_status_update_unix, last_acknowledged_unix, requested_reviewers,
-                   approval_status, last_review_status_update_unix
+                   approval_status, last_review_status_update_unix, user_has_reviewed
             FROM pull_requests
             "#,
         )
@@ -151,7 +153,7 @@ impl DatabaseRepository {
             SELECT number, title, repository, author, head_sha, draft, created_at_unix,
                    updated_at_unix, ci_status, last_comment_unix, last_commit_unix,
                    last_ci_status_update_unix, last_acknowledged_unix, requested_reviewers,
-                   approval_status, last_review_status_update_unix
+                   approval_status, last_review_status_update_unix, user_has_reviewed
             FROM pull_requests
             WHERE repository = ?1 AND number = ?2
             LIMIT 1
@@ -271,6 +273,7 @@ struct PullRequestRow {
     requested_reviewers: String,
     approval_status: i64,
     last_review_status_update_unix: i64,
+    user_has_reviewed: bool,
 }
 
 impl PullRequestRow {
@@ -298,6 +301,7 @@ impl PullRequestRow {
                 .map(unix_to_datetime)
                 .transpose()?,
             requested_reviewers,
+            user_has_reviewed: self.user_has_reviewed,
         })
     }
 }

@@ -19,10 +19,11 @@ async fn main() -> anyhow::Result<()> {
         .get_user()
         .await?
         .ok_or_else(|| anyhow::anyhow!("no authenticated user found, run cli auth first"))?;
+    let username = user.username.clone();
     let github = GitHubClient::new(user.access_token)?;
 
     loop {
-        match sync_all_tracked(&repo, &github).await {
+        match sync_all_tracked(&repo, &github, &username).await {
             Ok(summary) => {
                 println!(
                     "sync ok repos={} new={} updated={} deleted={}",

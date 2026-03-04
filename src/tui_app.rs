@@ -18,7 +18,7 @@ use tokio::sync::mpsc;
 
 use crate::db::DatabaseRepository;
 use crate::github::GitHubClient;
-use crate::models::{CiStatus, PullRequest};
+use crate::models::{ApprovalStatus, CiStatus, PullRequest};
 use crate::scoring;
 use crate::sync::{sync_all_tracked_with_progress, SyncRunSummary};
 
@@ -566,6 +566,7 @@ fn draw_pr_list(
                     } else {
                         Span::raw("")
                     },
+                    approval_badge(pr),
                     review_badge(pr, &model.username),
                 ]),
                 Line::from(Span::styled(
@@ -895,6 +896,20 @@ fn ci_label(status: CiStatus) -> &'static str {
         CiStatus::Pending => "pending",
         CiStatus::Success => "success",
         CiStatus::Failure => "failure",
+    }
+}
+
+fn approval_badge(pr: &PullRequest) -> Span<'static> {
+    match pr.approval_status {
+        ApprovalStatus::None => {
+            Span::styled("  no reviews", Style::default().fg(Color::DarkGray))
+        }
+        ApprovalStatus::Approved => {
+            Span::styled("  approved", Style::default().fg(Color::Green))
+        }
+        ApprovalStatus::ChangesRequested => {
+            Span::styled("  changes requested", Style::default().fg(Color::Red))
+        }
     }
 }
 

@@ -55,6 +55,7 @@ pub enum ChangeKind {
     NewCommit,
     NewCistatus,
     NewReviewStatus,
+    NewPullRequest,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -99,12 +100,7 @@ impl PullRequest {
 
     pub fn all_changes(&self) -> Vec<ChangeKind> {
         let Some(last_ack) = self.last_acknowledged_at else {
-            return vec![
-                ChangeKind::NewComment,
-                ChangeKind::NewCommit,
-                ChangeKind::NewCistatus,
-                ChangeKind::NewReviewStatus,
-            ];
+            return vec![ChangeKind::NewPullRequest];
         };
 
         let mut changes = Vec::new();
@@ -121,6 +117,19 @@ impl PullRequest {
             changes.push(ChangeKind::NewReviewStatus);
         }
         changes
+    }
+
+    pub fn should_notify_on_changes(&self, current_user: String) -> bool {
+        if !self.author.eq_ignore_ascii_case(&current_user) {
+            return true;
+        }
+
+        self.all_changes().into_iter().any(|change| {
+            matches!(
+                change,
+                ChangeKind::NewComment | ChangeKind::NewCistatus | ChangeKind::NewReviewStatus
+            )
+        })
     }
 
     pub fn updates_since_last_ack(&self) -> String {
@@ -162,4 +171,150 @@ pub struct TrackedRepository {
 pub struct User {
     pub access_token: String,
     pub username: String,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use chrono::TimeZone;
+
+    fn timestamp(seconds: i64) -> DateTime<Utc> {
+        Utc.timestamp_opt(seconds, 0)
+            .single()
+            .expect("valid timestamp")
+    }
+
+    fn author() -> String {
+        "octocat".to_string()
+    }
+
+    fn not_author() -> String {
+        "not-octocat".to_string()
+    }
+
+    #[derive(Debug, Clone, Copy)]
+    enum TestPrEvent {
+        Comment,
+        Commit,
+        CiStatus,
+        ReviewStatus,
+        Ack,
+    }
+
+    fn build_pull_request(events: &[TestPrEvent]) -> PullRequest {
+        let base_time = timestamp(1);
+        let mut pr = PullRequest {
+            number: 42,
+            title: "Improve all_changes tests".to_string(),
+            repository: "owner/repo".to_string(),
+            author: "octocat".to_string(),
+            head_sha: "abc123".to_string(),
+            draft: false,
+            created_at: base_time,
+            updated_at: base_time,
+            ci_status: CiStatus::Pending,
+            last_comment_at: base_time,
+            last_commit_at: base_time,
+            last_ci_status_update_at: base_time,
+            approval_status: ApprovalStatus::None,
+            last_review_status_update_at: base_time,
+            last_acknowledged_at: None,
+            requested_reviewers: vec![],
+            user_has_reviewed: false,
+        };
+
+        for (index, event) in events.iter().enumerate() {
+            let at = timestamp(index as i64 + 2);
+            pr.updated_at = at;
+
+            match event {
+                TestPrEvent::Comment => pr.last_comment_at = at,
+                TestPrEvent::Commit => pr.last_commit_at = at,
+                TestPrEvent::CiStatus => pr.last_ci_status_update_at = at,
+                TestPrEvent::ReviewStatus => pr.last_review_status_update_at = at,
+                TestPrEvent::Ack => pr.last_acknowledged_at = Some(at),
+            }
+        }
+
+        pr
+    }
+
+    #[test]
+    fn should_notify_returns_true() {
+        assert!(build_pull_request(&[]).should_notify_on_changes("foo".to_string()));
+    }
+
+    #[test]
+    fn notify_returns_false_for_new_pr_by_user() {
+        let pr = build_pull_request(&[]);
+
+        assert!(pr.should_notify_on_changes(author()) == false);
+    }
+
+    #[test]
+    fn notify_returns_true_for_new_pr_by_other_author() {
+        let pr = build_pull_request(&[]);
+
+        assert!(pr.should_notify_on_changes(not_author()));
+    }
+
+    #[test]
+    fn notify_returns_false_for_commit_on_authors_pr() {
+        let pr = build_pull_request(&[TestPrEvent::Ack, TestPrEvent::Commit]);
+
+        assert!(pr.should_notify_on_changes(author()) == false);
+    }
+
+    #[test]
+    fn notify_returns_true_for_commit_on_other_prs() {
+        let pr = build_pull_request(&[TestPrEvent::Ack, TestPrEvent::Commit]);
+
+        assert!(pr.should_notify_on_changes(not_author()));
+    }
+
+    #[test]
+    fn all_changes_returns_new_pull_request_when_never_acknowledged() {
+        let pr = build_pull_request(&[TestPrEvent::Commit, TestPrEvent::Comment]);
+
+        let changes = pr.all_changes();
+
+        assert!(matches!(changes.as_slice(), [ChangeKind::NewPullRequest]));
+    }
+
+    #[test]
+    fn all_changes_returns_empty_when_nothing_new_since_ack() {
+        let pr = build_pull_request(&[
+            TestPrEvent::Comment,
+            TestPrEvent::Commit,
+            TestPrEvent::CiStatus,
+            TestPrEvent::ReviewStatus,
+            TestPrEvent::Ack,
+        ]);
+
+        let changes = pr.all_changes();
+
+        assert!(changes.is_empty());
+    }
+
+    #[test]
+    fn all_changes_returns_only_changes_after_ack_in_expected_order() {
+        let pr = build_pull_request(&[
+            TestPrEvent::Comment,
+            TestPrEvent::Ack,
+            TestPrEvent::Commit,
+            TestPrEvent::CiStatus,
+            TestPrEvent::ReviewStatus,
+        ]);
+
+        let changes = pr.all_changes();
+
+        assert!(matches!(
+            changes.as_slice(),
+            [
+                ChangeKind::NewCommit,
+                ChangeKind::NewCistatus,
+                ChangeKind::NewReviewStatus
+            ]
+        ));
+    }
 }

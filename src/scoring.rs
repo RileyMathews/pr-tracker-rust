@@ -9,11 +9,8 @@ pub fn importance_score(pr: &PullRequest, username: &str) -> i64 {
     let mut score: i64 = 0;
 
     let is_author = !username.is_empty() && pr.author.eq_ignore_ascii_case(username);
-    let is_requested_reviewer = !username.is_empty()
-        && pr
-            .requested_reviewers
-            .iter()
-            .any(|r| r.eq_ignore_ascii_case(username));
+    let is_involved = pr.user_is_involved(username);
+    let is_requested_reviewer = is_involved && !is_author;
 
     // Ownership axis (primary separator)
     if is_author {

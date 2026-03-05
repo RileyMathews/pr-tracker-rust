@@ -157,8 +157,8 @@ impl Model {
             .collect();
 
         indices.sort_by(|&a, &b| {
-            let score_a = scoring::importance_score(&self.prs[a], &self.username);
-            let score_b = scoring::importance_score(&self.prs[b], &self.username);
+            let score_a = tui_attention_score(&self.prs[a], &self.username);
+            let score_b = tui_attention_score(&self.prs[b], &self.username);
             let pr_a = &self.prs[a];
             let pr_b = &self.prs[b];
             score_b
@@ -567,6 +567,7 @@ fn draw_pr_list(
                         Span::raw("")
                     },
                     approval_badge(pr),
+                    involved_badge(pr, &model.username),
                     review_badge(pr, &model.username),
                 ]),
                 Line::from(Span::styled(
@@ -913,21 +914,37 @@ fn approval_badge(pr: &PullRequest) -> Span<'static> {
     }
 }
 
+fn involved_badge<'a>(pr: &PullRequest, username: &str) -> Span<'a> {
+    if pr.user_is_involved(username) {
+        Span::styled(
+            "  involved",
+            Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
+        )
+    } else {
+        Span::raw("")
+    }
+}
+
 fn review_badge<'a>(pr: &PullRequest, username: &str) -> Span<'a> {
     if username.is_empty() || pr.author.eq_ignore_ascii_case(username) {
         return Span::raw("");
     }
-    let is_requested = pr
-        .requested_reviewers
-        .iter()
-        .any(|r| r.eq_ignore_ascii_case(username));
-    if is_requested {
+
+    if pr.user_is_involved(username) {
         Span::styled("  review requested", Style::default().fg(Color::Yellow))
     } else if pr.user_has_reviewed {
         Span::styled("  reviewed", Style::default().fg(Color::Green))
     } else {
         Span::raw("")
     }
+}
+
+fn tui_attention_score(pr: &PullRequest, username: &str) -> i64 {
+    let mut score = scoring::importance_score(pr, username);
+    if pr.user_is_involved(username) {
+        score += 100;
+    }
+    score
 }
 
 fn truncate(value: &str, max_chars: usize) -> String {

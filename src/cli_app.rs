@@ -255,7 +255,7 @@ async fn handle_sync(repo: &DatabaseRepository) -> anyhow::Result<()> {
     let summary =
         sync_all_tracked_with_progress(repo, &github, &username, log_sync_progress).await?;
 
-    let _ = notify_sync_changes(&summary);
+    let _ = notify_sync_changes(&summary, &username);
 
     println!(
         "Sync complete: repos={} new={} updated={} deleted={}",
@@ -280,7 +280,7 @@ async fn handle_prs(repo: &DatabaseRepository) -> anyhow::Result<()> {
     Ok(())
 }
 
-fn notify_sync_changes(summary: &SyncRunSummary) -> anyhow::Result<()> {
+fn notify_sync_changes(summary: &SyncRunSummary, username: &str) -> anyhow::Result<()> {
     if summary.new_prs.is_empty() && summary.updated_prs.is_empty() {
         return Ok(());
     }
@@ -288,6 +288,10 @@ fn notify_sync_changes(summary: &SyncRunSummary) -> anyhow::Result<()> {
     #[cfg(target_os = "linux")]
     {
         for pr in &summary.new_prs {
+            if !pr.should_notify_on_changes(username.to_string()) {
+                continue;
+            }
+
             let body = format!(
                 "{}#{} by {} {}",
                 pr.repository, pr.number, pr.author, pr.title
@@ -301,6 +305,10 @@ fn notify_sync_changes(summary: &SyncRunSummary) -> anyhow::Result<()> {
         }
 
         for pr in &summary.updated_prs {
+            if !pr.should_notify_on_changes(username.to_string()) {
+                continue;
+            }
+
             let body = format!(
                 "{}#{} by {} {}",
                 pr.repository, pr.number, pr.author, pr.title

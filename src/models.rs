@@ -153,6 +153,20 @@ impl PullRequest {
         "  New PR".to_string()
     }
 
+    pub fn user_is_involved(&self, current_user: &str) -> bool {
+        if current_user.is_empty() {
+            return false;
+        }
+
+        if self.author.eq_ignore_ascii_case(current_user) {
+            return true;
+        }
+
+        self.requested_reviewers
+            .iter()
+            .any(|reviewer| reviewer.eq_ignore_ascii_case(current_user))
+    }
+
     pub fn url(&self) -> String {
         format!(
             "https://github.com/{}/pull/{}",
@@ -316,5 +330,38 @@ mod tests {
                 ChangeKind::NewReviewStatus
             ]
         ));
+    }
+
+    #[test]
+    fn user_is_involved_returns_true_for_author() {
+        let pr = build_pull_request(&[]);
+
+        assert!(pr.user_is_involved(&author()));
+    }
+
+    #[test]
+    fn user_is_involved_returns_true_for_requested_reviewer() {
+        let mut pr = build_pull_request(&[]);
+        pr.requested_reviewers = vec!["reviewer".to_string()];
+
+        assert!(pr.user_is_involved("reviewer"));
+    }
+
+    #[test]
+    fn user_is_involved_returns_false_for_unrelated_user() {
+        let mut pr = build_pull_request(&[]);
+        pr.requested_reviewers = vec!["reviewer".to_string()];
+
+        assert!(!pr.user_is_involved("someone-else"));
+    }
+
+    #[test]
+    fn user_is_involved_is_case_insensitive() {
+        let mut pr = build_pull_request(&[]);
+        pr.author = "OctoCat".to_string();
+        pr.requested_reviewers = vec!["ReVieWer".to_string()];
+
+        assert!(pr.user_is_involved("octocat"));
+        assert!(pr.user_is_involved("reviewer"));
     }
 }

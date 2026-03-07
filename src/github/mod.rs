@@ -5,6 +5,7 @@ use reqwest::header::{HeaderMap, HeaderValue, ACCEPT, AUTHORIZATION, USER_AGENT}
 use serde::de::DeserializeOwned;
 
 pub mod graphql;
+pub mod mappers;
 pub mod schema;
 
 const BASE_URL: &str = "https://api.github.com";

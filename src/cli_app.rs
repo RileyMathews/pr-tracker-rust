@@ -1,8 +1,8 @@
-use std::collections::HashSet;
 use std::io::IsTerminal;
 
 use clap::{Parser, Subcommand};
 
+use crate::core::classify_team_members;
 use crate::db::DatabaseRepository;
 use crate::github::GitHubClient;
 use crate::models::User;
@@ -137,7 +137,7 @@ async fn handle_authors_from_teams(repo: &DatabaseRepository) -> anyhow::Result<
         return Ok(());
     }
 
-    let mut seen_logins: HashSet<String> = HashSet::new();
+    let mut seen_logins: std::collections::HashSet<String> = std::collections::HashSet::new();
     let mut all_members: Vec<String> = Vec::new();
 
     for team in &teams {
@@ -151,33 +151,18 @@ async fn handle_authors_from_teams(repo: &DatabaseRepository) -> anyhow::Result<
         }
     }
 
-    let current_login_lower = user.username.to_lowercase();
     let already_tracked: Vec<String> = repo.get_tracked_authors().await?;
-    let tracked_lower: HashSet<String> = already_tracked.iter().map(|s| s.to_lowercase()).collect();
+    let classified = classify_team_members(all_members, &user.username, &already_tracked);
 
-    // Split all_members into already-tracked teammates and new candidates
-    let mut tracked_teammates: Vec<String> = Vec::new();
-    let mut candidates: Vec<String> = Vec::new();
-    for login in all_members {
-        let lower = login.to_lowercase();
-        if lower == current_login_lower {
-            // skip self
-        } else if tracked_lower.contains(&lower) {
-            tracked_teammates.push(login);
-        } else {
-            candidates.push(login);
-        }
-    }
-
-    if !tracked_teammates.is_empty() {
+    if !classified.already_tracked.is_empty() {
         println!("Already tracking from your teams:");
-        for login in &tracked_teammates {
+        for login in &classified.already_tracked {
             println!("  ✓ {}", login);
         }
         println!();
     }
 
-    if candidates.is_empty() {
+    if classified.candidates.is_empty() {
         println!("All team members are already being tracked.");
         return Ok(());
     }
@@ -188,18 +173,21 @@ async fn handle_authors_from_teams(repo: &DatabaseRepository) -> anyhow::Result<
         );
     }
 
-    let selected_logins = match inquire::MultiSelect::new("Select authors to track:", candidates)
-        .with_help_message("↑↓ navigate  space select  type to filter  enter confirm  esc cancel")
-        .with_page_size(15)
-        .prompt_skippable()
-        .map_err(|e| anyhow::anyhow!("selection prompt failed: {e}"))?
-    {
-        Some(logins) if !logins.is_empty() => logins,
-        _ => {
-            println!("No authors selected.");
-            return Ok(());
-        }
-    };
+    let selected_logins =
+        match inquire::MultiSelect::new("Select authors to track:", classified.candidates)
+            .with_help_message(
+                "↑↓ navigate  space select  type to filter  enter confirm  esc cancel",
+            )
+            .with_page_size(15)
+            .prompt_skippable()
+            .map_err(|e| anyhow::anyhow!("selection prompt failed: {e}"))?
+        {
+            Some(logins) if !logins.is_empty() => logins,
+            _ => {
+                println!("No authors selected.");
+                return Ok(());
+            }
+        };
 
     let count = selected_logins.len();
     repo.save_tracked_authors_batch(&selected_logins).await?;
@@ -292,10 +280,7 @@ fn notify_sync_changes(summary: &SyncRunSummary, username: &str) -> anyhow::Resu
                 continue;
             }
 
-            let body = format!(
-                "{}#{} by {} {}",
-                pr.repository, pr.number, pr.author, pr.title
-            );
+            let body = pr.notification_body();
 
             notify_rust::Notification::new()
                 .summary("PR Tracker - New PR")
@@ -309,10 +294,7 @@ fn notify_sync_changes(summary: &SyncRunSummary, username: &str) -> anyhow::Resu
                 continue;
             }
 
-            let body = format!(
-                "{}#{} by {} {}",
-                pr.repository, pr.number, pr.author, pr.title
-            );
+            let body = pr.notification_body();
 
             notify_rust::Notification::new()
                 .summary("PR Tracker - Updated PR")

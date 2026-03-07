@@ -92,6 +92,7 @@ mod tests {
             last_acknowledged_at: None,
             requested_reviewers: Vec::new(),
             user_has_reviewed: false,
+            comments: Vec::new(),
         }
     }
 

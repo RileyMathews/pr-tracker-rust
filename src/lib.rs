@@ -6,7 +6,7 @@ pub mod models;
 pub mod scoring;
 pub mod service;
 pub mod sync;
-pub mod tui_app;
+pub mod tui;
 
 /// Returns the default SQLite database URL, honouring XDG conventions.
 ///

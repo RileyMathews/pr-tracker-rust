@@ -87,6 +87,7 @@ mod tests {
             last_comment_at: DateTime::UNIX_EPOCH,
             last_commit_at: DateTime::UNIX_EPOCH,
             last_ci_status_update_at: DateTime::UNIX_EPOCH,
+            comments: vec![],
             approval_status: ApprovalStatus::None,
             last_review_status_update_at: DateTime::UNIX_EPOCH,
             last_acknowledged_at: None,

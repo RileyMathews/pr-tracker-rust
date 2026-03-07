@@ -107,6 +107,7 @@ mod tests {
             approval_status: ApprovalStatus::None,
             last_review_status_update_at: DateTime::UNIX_EPOCH,
             last_acknowledged_at: None,
+            comments: vec![],
             requested_reviewers: Vec::new(),
             user_has_reviewed: false,
         }

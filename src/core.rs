@@ -11,6 +11,58 @@ pub struct SyncDiff {
     pub removed_prs: Vec<PullRequest>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RepoSyncPlan {
+    pub all_pr_numbers_to_refresh: Vec<i64>,
+    pub watermark_to_persist: Option<DateTime<Utc>>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ClosedPrProjection {
+    pub closed_pr_numbers: HashSet<i64>,
+    pub deleted_prs: Vec<PullRequest>,
+}
+
+pub fn build_repo_sync_plan(
+    known_pr_numbers: &[i64],
+    new_pr_numbers: &[i64],
+    max_updated_at: Option<DateTime<Utc>>,
+) -> RepoSyncPlan {
+    let mut seen = HashSet::new();
+    let all_pr_numbers_to_refresh = known_pr_numbers
+        .iter()
+        .chain(new_pr_numbers.iter())
+        .copied()
+        .filter(|number| seen.insert(*number))
+        .collect();
+
+    RepoSyncPlan {
+        all_pr_numbers_to_refresh,
+        watermark_to_persist: compute_sync_watermark(max_updated_at),
+    }
+}
+
+pub fn compute_sync_watermark(max_updated_at: Option<DateTime<Utc>>) -> Option<DateTime<Utc>> {
+    max_updated_at.map(|max_ts| max_ts - chrono::Duration::seconds(1))
+}
+
+pub fn project_closed_pull_requests(
+    existing_prs: &[PullRequest],
+    closed_pr_numbers: &[i64],
+) -> ClosedPrProjection {
+    let closed_pr_numbers: HashSet<i64> = closed_pr_numbers.iter().copied().collect();
+    let deleted_prs = existing_prs
+        .iter()
+        .filter(|pr| closed_pr_numbers.contains(&pr.number))
+        .cloned()
+        .collect();
+
+    ClosedPrProjection {
+        closed_pr_numbers,
+        deleted_prs,
+    }
+}
+
 pub fn process_pull_request_sync_results(
     prs_from_database: &[PullRequest],
     prs_from_fresh_sync: &[PullRequest],
@@ -126,9 +178,14 @@ fn collect_removed_pull_requests(
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashSet;
+
     use chrono::{DateTime, TimeZone, Utc};
 
-    use super::process_pull_request_sync_results;
+    use super::{
+        build_repo_sync_plan, compute_sync_watermark, process_pull_request_sync_results,
+        project_closed_pull_requests,
+    };
     use crate::models::{ApprovalStatus, CiStatus, PullRequest};
 
     fn dt(year: i32, month: u32, day: u32, hour: u32) -> DateTime<Utc> {
@@ -338,5 +395,47 @@ mod tests {
             result.updated_prs[0].approval_status,
             ApprovalStatus::Approved
         );
+    }
+
+    #[test]
+    fn repo_sync_plan_is_empty_when_no_pr_numbers() {
+        let plan = build_repo_sync_plan(&[], &[], None);
+
+        assert!(plan.all_pr_numbers_to_refresh.is_empty());
+        assert_eq!(plan.watermark_to_persist, None);
+    }
+
+    #[test]
+    fn repo_sync_plan_deduplicates_known_and_new_numbers() {
+        let plan = build_repo_sync_plan(&[1, 2, 2], &[2, 3, 1], None);
+
+        assert_eq!(plan.all_pr_numbers_to_refresh, vec![1, 2, 3]);
+    }
+
+    #[test]
+    fn watermark_has_one_second_overlap_window() {
+        let max_updated_at = dt(2025, 1, 1, 0);
+
+        let watermark = compute_sync_watermark(Some(max_updated_at));
+
+        assert_eq!(
+            watermark,
+            Some(max_updated_at - chrono::Duration::seconds(1))
+        );
+    }
+
+    #[test]
+    fn watermark_is_none_when_no_max_updated_at() {
+        assert_eq!(compute_sync_watermark(None), None);
+    }
+
+    #[test]
+    fn projects_closed_prs_to_deleted_results() {
+        let existing_prs = vec![empty_pr("org/repo", 1), empty_pr("org/repo", 2)];
+
+        let projection = project_closed_pull_requests(&existing_prs, &[2, 3]);
+
+        assert_eq!(projection.closed_pr_numbers, HashSet::from([2, 3]));
+        assert_eq!(projection.deleted_prs, vec![empty_pr("org/repo", 2)]);
     }
 }

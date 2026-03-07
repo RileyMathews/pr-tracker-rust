@@ -5,7 +5,7 @@ use chrono::{DateTime, Utc};
 use tokio::sync::Semaphore;
 use tokio::task::JoinSet;
 
-use crate::core::{process_pull_request_sync_results, SyncDiff};
+use crate::core::{pr_age_cutoff, process_pull_request_sync_results, SyncDiff};
 use crate::db::DatabaseRepository;
 use crate::github::GitHubClient;
 use crate::models::{PullRequest, TrackedRepository};
@@ -14,17 +14,13 @@ use crate::service;
 const DEFAULT_MAX_PR_AGE_DAYS: i64 = 7;
 const MAX_CONCURRENT_REPOS: usize = 5;
 
-fn pr_age_cutoff() -> Option<DateTime<Utc>> {
+/// Read the PR age cutoff from environment, delegating to the pure `core::pr_age_cutoff`.
+fn read_pr_age_cutoff() -> Option<DateTime<Utc>> {
     let days: i64 = std::env::var("PR_TRACKER_MAX_PR_AGE_DAYS")
         .ok()
         .and_then(|raw| raw.parse().ok())
         .unwrap_or(DEFAULT_MAX_PR_AGE_DAYS);
-
-    if days <= 0 {
-        return None; // 0 or negative means no cutoff (fetch all)
-    }
-
-    Some(Utc::now() - chrono::Duration::days(days))
+    pr_age_cutoff(days, Utc::now())
 }
 
 /// Compute the discovery cutoff for a repository.
@@ -161,7 +157,7 @@ async fn sync_single_repo(
     let repo_name = &tracked_repo.repository;
 
     // Step 1: Compute cutoff
-    let discovery_cutoff = compute_discovery_cutoff(tracked_repo.last_synced_at, pr_age_cutoff());
+    let discovery_cutoff = compute_discovery_cutoff(tracked_repo.last_synced_at, read_pr_age_cutoff());
 
     // Step 2: Phase 1 — Discovery
     let existing_prs = repository.get_prs_by_repository(repo_name).await?;

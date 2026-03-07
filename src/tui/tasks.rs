@@ -1,5 +1,6 @@
 use tokio::sync::mpsc;
 
+use crate::core::categorize_team_members;
 use crate::db::DatabaseRepository;
 use crate::github::GitHubClient;
 use crate::sync::{sync_all_tracked_with_progress, SyncRunSummary};
@@ -66,36 +67,26 @@ async fn run_teams_fetch(repo: DatabaseRepository) -> anyhow::Result<TeamsPayloa
     let github = GitHubClient::new(user.access_token.clone())?;
 
     let tracked_authors = repo.get_tracked_authors().await?;
-    let tracked_set: std::collections::HashSet<String> =
-        tracked_authors.iter().map(|s| s.to_lowercase()).collect();
-    let current_login_lower = user.username.to_lowercase();
 
+    // Imperative shell: fetch all team members via HTTP
     let teams = github.fetch_user_teams().await?;
-
-    let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
     let mut all_members: Vec<String> = Vec::new();
     for team in &teams {
         let members = github
             .fetch_team_members(&team.organization.login, &team.slug)
             .await?;
         for member in members {
-            let lower = member.login.to_lowercase();
-            if lower != current_login_lower && seen.insert(lower.clone()) {
-                all_members.push(member.login);
-            }
+            all_members.push(member.login);
         }
     }
 
-    let mut untracked: Vec<String> = all_members
-        .into_iter()
-        .filter(|login| !tracked_set.contains(&login.to_lowercase()))
-        .collect();
-    untracked.sort();
+    // Pure core: categorize members
+    let categorized = categorize_team_members(&all_members, &tracked_authors, &user.username);
 
-    let mut tracked = tracked_authors;
-    tracked.sort();
-
-    Ok(TeamsPayload { tracked, untracked })
+    Ok(TeamsPayload {
+        tracked: categorized.tracked,
+        untracked: categorized.untracked,
+    })
 }
 
 /// Get a human-readable label for a background job.

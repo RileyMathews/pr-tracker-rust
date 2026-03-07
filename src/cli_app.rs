@@ -1,8 +1,8 @@
-use std::collections::HashSet;
 use std::io::IsTerminal;
 
 use clap::{Parser, Subcommand};
 
+use crate::core::{categorize_team_members, notification_body, prs_to_notify};
 use crate::db::DatabaseRepository;
 use crate::github::GitHubClient;
 use crate::models::User;
@@ -137,47 +137,30 @@ async fn handle_authors_from_teams(repo: &DatabaseRepository) -> anyhow::Result<
         return Ok(());
     }
 
-    let mut seen_logins: HashSet<String> = HashSet::new();
+    // Imperative shell: fetch all team members via HTTP
     let mut all_members: Vec<String> = Vec::new();
-
     for team in &teams {
         let members = github
             .fetch_team_members(&team.organization.login, &team.slug)
             .await?;
         for member in members {
-            if seen_logins.insert(member.login.clone()) {
-                all_members.push(member.login);
-            }
+            all_members.push(member.login);
         }
     }
 
-    let current_login_lower = user.username.to_lowercase();
-    let already_tracked: Vec<String> = repo.get_tracked_authors().await?;
-    let tracked_lower: HashSet<String> = already_tracked.iter().map(|s| s.to_lowercase()).collect();
+    // Pure core: categorize members
+    let already_tracked = repo.get_tracked_authors().await?;
+    let categorized = categorize_team_members(&all_members, &already_tracked, &user.username);
 
-    // Split all_members into already-tracked teammates and new candidates
-    let mut tracked_teammates: Vec<String> = Vec::new();
-    let mut candidates: Vec<String> = Vec::new();
-    for login in all_members {
-        let lower = login.to_lowercase();
-        if lower == current_login_lower {
-            // skip self
-        } else if tracked_lower.contains(&lower) {
-            tracked_teammates.push(login);
-        } else {
-            candidates.push(login);
-        }
-    }
-
-    if !tracked_teammates.is_empty() {
+    if !categorized.tracked.is_empty() {
         println!("Already tracking from your teams:");
-        for login in &tracked_teammates {
+        for login in &categorized.tracked {
             println!("  ✓ {}", login);
         }
         println!();
     }
 
-    if candidates.is_empty() {
+    if categorized.untracked.is_empty() {
         println!("All team members are already being tracked.");
         return Ok(());
     }
@@ -188,7 +171,7 @@ async fn handle_authors_from_teams(repo: &DatabaseRepository) -> anyhow::Result<
         );
     }
 
-    let selected_logins = match inquire::MultiSelect::new("Select authors to track:", candidates)
+    let selected_logins = match inquire::MultiSelect::new("Select authors to track:", categorized.untracked)
         .with_help_message("↑↓ navigate  space select  type to filter  enter confirm  esc cancel")
         .with_page_size(15)
         .prompt_skippable()
@@ -287,16 +270,9 @@ fn notify_sync_changes(summary: &SyncRunSummary, username: &str) -> anyhow::Resu
 
     #[cfg(target_os = "linux")]
     {
-        for pr in &summary.new_prs {
-            if !pr.should_notify_on_changes(username.to_string()) {
-                continue;
-            }
-
-            let body = format!(
-                "{}#{} by {} {}",
-                pr.repository, pr.number, pr.author, pr.title
-            );
-
+        // Pure core: filter which PRs should generate notifications
+        for pr in prs_to_notify(&summary.new_prs, username) {
+            let body = notification_body(pr);
             notify_rust::Notification::new()
                 .summary("PR Tracker - New PR")
                 .body(&body)
@@ -304,16 +280,8 @@ fn notify_sync_changes(summary: &SyncRunSummary, username: &str) -> anyhow::Resu
                 .show()?;
         }
 
-        for pr in &summary.updated_prs {
-            if !pr.should_notify_on_changes(username.to_string()) {
-                continue;
-            }
-
-            let body = format!(
-                "{}#{} by {} {}",
-                pr.repository, pr.number, pr.author, pr.title
-            );
-
+        for pr in prs_to_notify(&summary.updated_prs, username) {
+            let body = notification_body(pr);
             notify_rust::Notification::new()
                 .summary("PR Tracker - Updated PR")
                 .body(&body)

@@ -1,8 +1,10 @@
 use std::collections::{HashMap, HashSet};
 
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, Duration, Utc};
 
 use crate::models::PullRequest;
+
+// ── Sync diff ───────────────────────────────────────────────────────
 
 #[derive(Debug, Default)]
 pub struct SyncDiff {
@@ -124,11 +126,91 @@ fn collect_removed_pull_requests(
         .collect()
 }
 
+// ── Team member categorization ──────────────────────────────────────
+
+/// Result of categorizing team members into tracked and untracked groups.
+#[derive(Debug, PartialEq)]
+pub struct CategorizedMembers {
+    /// Members already being tracked.
+    pub tracked: Vec<String>,
+    /// Members not yet tracked (candidates for tracking).
+    pub untracked: Vec<String>,
+}
+
+/// Pure function: categorize a list of team member logins into tracked and untracked.
+///
+/// - Deduplicates members (case-insensitive)
+/// - Excludes `current_user` from both lists
+/// - Splits remaining into tracked vs untracked based on `already_tracked`
+/// - Both output lists are sorted alphabetically
+pub fn categorize_team_members(
+    all_member_logins: &[String],
+    already_tracked: &[String],
+    current_user: &str,
+) -> CategorizedMembers {
+    let current_lower = current_user.to_lowercase();
+    let tracked_set: HashSet<String> = already_tracked.iter().map(|s| s.to_lowercase()).collect();
+
+    let mut seen: HashSet<String> = HashSet::new();
+    let mut tracked = Vec::new();
+    let mut untracked = Vec::new();
+
+    for login in all_member_logins {
+        let lower = login.to_lowercase();
+        if lower == current_lower {
+            continue; // skip self
+        }
+        if !seen.insert(lower.clone()) {
+            continue; // skip duplicate
+        }
+        if tracked_set.contains(&lower) {
+            tracked.push(login.clone());
+        } else {
+            untracked.push(login.clone());
+        }
+    }
+
+    tracked.sort();
+    untracked.sort();
+
+    CategorizedMembers { tracked, untracked }
+}
+
+// ── PR age cutoff ──────────────────────────────────────────────────
+
+/// Pure function: compute the PR age cutoff date.
+///
+/// Given a max-age in days and the current time, returns the cutoff timestamp.
+/// A value of 0 or negative means "no cutoff" (returns None).
+pub fn pr_age_cutoff(max_age_days: i64, now: DateTime<Utc>) -> Option<DateTime<Utc>> {
+    if max_age_days <= 0 {
+        return None;
+    }
+    Some(now - Duration::days(max_age_days))
+}
+
+// ── Notification filtering ─────────────────────────────────────────
+
+/// Pure function: build a notification body string for a PR.
+pub fn notification_body(pr: &PullRequest) -> String {
+    format!(
+        "{}#{} by {} {}",
+        pr.repository, pr.number, pr.author, pr.title
+    )
+}
+
+/// Pure function: filter PRs that should generate notifications.
+pub fn prs_to_notify<'a>(prs: &'a [PullRequest], username: &str) -> Vec<&'a PullRequest> {
+    prs.iter()
+        .filter(|pr| pr.should_notify_on_changes(username.to_string()))
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use chrono::{DateTime, TimeZone, Utc};
 
-    use super::process_pull_request_sync_results;
+    use super::*;
     use crate::models::{ApprovalStatus, CiStatus, PullRequest};
 
     fn dt(year: i32, month: u32, day: u32, hour: u32) -> DateTime<Utc> {
@@ -338,5 +420,120 @@ mod tests {
             result.updated_prs[0].approval_status,
             ApprovalStatus::Approved
         );
+    }
+
+    // ── categorize_team_members tests ───────────────────────────────
+
+    #[test]
+    fn categorize_excludes_current_user() {
+        let members = vec!["alice".to_string(), "bob".to_string()];
+        let tracked: Vec<String> = vec![];
+        let result = categorize_team_members(&members, &tracked, "alice");
+        assert_eq!(result.untracked, vec!["bob"]);
+        assert!(result.tracked.is_empty());
+    }
+
+    #[test]
+    fn categorize_excludes_current_user_case_insensitive() {
+        let members = vec!["Alice".to_string(), "bob".to_string()];
+        let tracked: Vec<String> = vec![];
+        let result = categorize_team_members(&members, &tracked, "alice");
+        assert_eq!(result.untracked, vec!["bob"]);
+    }
+
+    #[test]
+    fn categorize_splits_tracked_and_untracked() {
+        let members = vec![
+            "alice".to_string(),
+            "bob".to_string(),
+            "carol".to_string(),
+        ];
+        let tracked = vec!["bob".to_string()];
+        let result = categorize_team_members(&members, &tracked, "me");
+        assert_eq!(result.tracked, vec!["bob"]);
+        assert_eq!(result.untracked, vec!["alice", "carol"]);
+    }
+
+    #[test]
+    fn categorize_deduplicates_members() {
+        let members = vec![
+            "alice".to_string(),
+            "Alice".to_string(),
+            "ALICE".to_string(),
+        ];
+        let tracked: Vec<String> = vec![];
+        let result = categorize_team_members(&members, &tracked, "me");
+        assert_eq!(result.untracked.len(), 1);
+    }
+
+    #[test]
+    fn categorize_empty_members() {
+        let result = categorize_team_members(&[], &[], "me");
+        assert!(result.tracked.is_empty());
+        assert!(result.untracked.is_empty());
+    }
+
+    #[test]
+    fn categorize_sorts_output() {
+        let members = vec![
+            "zulu".to_string(),
+            "alpha".to_string(),
+            "mike".to_string(),
+        ];
+        let tracked: Vec<String> = vec![];
+        let result = categorize_team_members(&members, &tracked, "me");
+        assert_eq!(result.untracked, vec!["alpha", "mike", "zulu"]);
+    }
+
+    // ── pr_age_cutoff tests ────────────────────────────────────────
+
+    #[test]
+    fn age_cutoff_positive_days() {
+        let now = dt(2025, 6, 15, 0);
+        let result = pr_age_cutoff(7, now);
+        assert_eq!(result, Some(dt(2025, 6, 8, 0)));
+    }
+
+    #[test]
+    fn age_cutoff_zero_returns_none() {
+        let now = dt(2025, 6, 15, 0);
+        assert_eq!(pr_age_cutoff(0, now), None);
+    }
+
+    #[test]
+    fn age_cutoff_negative_returns_none() {
+        let now = dt(2025, 6, 15, 0);
+        assert_eq!(pr_age_cutoff(-5, now), None);
+    }
+
+    // ── notification filtering tests ───────────────────────────────
+
+    #[test]
+    fn notification_body_format() {
+        let pr = PullRequest {
+            title: "Fix bug".to_string(),
+            author: "alice".to_string(),
+            repository: "org/repo".to_string(),
+            number: 42,
+            ..empty_pr("org/repo", 42)
+        };
+        assert_eq!(notification_body(&pr), "org/repo#42 by alice Fix bug");
+    }
+
+    #[test]
+    fn prs_to_notify_filters_by_should_notify() {
+        let pr1 = PullRequest {
+            author: "other".to_string(),
+            ..empty_pr("org/repo", 1)
+        };
+        let pr2 = PullRequest {
+            author: "me".to_string(),
+            ..empty_pr("org/repo", 2)
+        };
+        // pr1 is by "other" so should notify "me"; pr2 is by "me" (new PR by self = no notify)
+        let prs = vec![pr1.clone(), pr2];
+        let result = prs_to_notify(&prs, "me");
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].number, 1);
     }
 }

@@ -1,5 +1,18 @@
 use chrono::{DateTime, Utc};
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PrComment {
+    pub id: String,
+    pub repository: String,
+    pub pr_number: i64,
+    pub author: String,
+    pub body: String,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+    pub is_review_comment: bool,
+    pub review_state: Option<String>,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CiStatus {
     Pending,
@@ -77,6 +90,7 @@ pub struct PullRequest {
     pub last_acknowledged_at: Option<DateTime<Utc>>,
     pub requested_reviewers: Vec<String>,
     pub user_has_reviewed: bool,
+    pub comments: Vec<PrComment>,
 }
 
 impl PullRequest {
@@ -235,6 +249,7 @@ mod tests {
             last_acknowledged_at: None,
             requested_reviewers: vec![],
             user_has_reviewed: false,
+            comments: vec![],
         };
 
         for (index, event) in events.iter().enumerate() {

@@ -181,8 +181,8 @@ async fn sync_single_repo(
     let mut all_pr_numbers = known_pr_numbers;
     all_pr_numbers.extend(&new_pr_numbers);
 
-    let (fresh_prs, closed_pr_numbers) = if all_pr_numbers.is_empty() {
-        (Vec::new(), Vec::new())
+    let (fresh_prs, all_comments, closed_pr_numbers) = if all_pr_numbers.is_empty() {
+        (Vec::new(), Vec::new(), Vec::new())
     } else {
         service::fetch_pull_requests_by_number(github, repo_name, &all_pr_numbers, username).await?
     };
@@ -207,6 +207,11 @@ async fn sync_single_repo(
     // Delete closed/merged/deleted PRs explicitly
     for pr_number in &closed_pr_numbers {
         repository.delete_pr(repo_name, *pr_number).await?;
+    }
+
+    // Persist comments for all fetched PRs
+    for comment in all_comments {
+        repository.save_comment(&comment).await?;
     }
 
     // Step 5: Update last_synced_at

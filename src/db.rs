@@ -4,7 +4,7 @@ use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
 use sqlx::{FromRow, Row, SqlitePool};
 use std::str::FromStr;
 
-use crate::models::{ApprovalStatus, CiStatus, PullRequest, TrackedRepository, User};
+use crate::models::{ApprovalStatus, CiStatus, PrComment, PullRequest, TrackedRepository, User};
 
 pub static MIGRATOR: Migrator = sqlx::migrate!("./migrations");
 
@@ -15,7 +15,9 @@ pub struct DatabaseRepository {
 
 impl DatabaseRepository {
     pub async fn connect(database_path: &str) -> anyhow::Result<Self> {
-        let options = SqliteConnectOptions::from_str(database_path)?.create_if_missing(true);
+        let options = SqliteConnectOptions::from_str(database_path)?
+            .create_if_missing(true)
+            .pragma("foreign_keys", "ON");
         let pool = SqlitePoolOptions::new().connect_with(options).await?;
         Ok(Self { pool })
     }
@@ -86,37 +88,112 @@ impl DatabaseRepository {
     }
 
     pub async fn get_prs_by_repository(&self, repo_name: &str) -> anyhow::Result<Vec<PullRequest>> {
-        let rows = sqlx::query_as::<_, PullRequestRow>(
+        let rows = sqlx::query_as::<_, PullRequestWithCommentsRow>(
             r#"
-            SELECT number, title, repository, author, head_sha, draft, created_at_unix,
-                   updated_at_unix, ci_status, last_comment_unix, last_commit_unix,
-                   last_ci_status_update_unix, last_acknowledged_unix, requested_reviewers,
-                   approval_status, last_review_status_update_unix, user_has_reviewed
-            FROM pull_requests
-            WHERE repository = ?1
+            SELECT 
+                pr.number,
+                pr.title,
+                pr.repository,
+                pr.author,
+                pr.head_sha,
+                pr.draft,
+                pr.created_at_unix,
+                pr.updated_at_unix,
+                pr.ci_status,
+                pr.last_comment_unix,
+                pr.last_commit_unix,
+                pr.last_ci_status_update_unix,
+                pr.last_acknowledged_unix,
+                pr.requested_reviewers,
+                pr.approval_status,
+                pr.last_review_status_update_unix,
+                pr.user_has_reviewed,
+                COALESCE(
+                    json_group_array(
+                        json_object(
+                            'id', c.id,
+                            'repository', c.repository,
+                            'pr_number', c.pr_number,
+                            'author', c.author,
+                            'body', c.body,
+                            'created_at_unix', c.created_at_unix,
+                            'updated_at_unix', c.updated_at_unix,
+                            'is_review_comment', c.is_review_comment,
+                            'review_state', c.review_state
+                        )
+                        ORDER BY c.created_at_unix ASC
+                    ),
+                    '[]'
+                ) as comments_json
+            FROM pull_requests pr
+            LEFT JOIN pr_comments c 
+                ON pr.repository = c.repository AND pr.number = c.pr_number
+            WHERE pr.repository = ?1
+            GROUP BY pr.repository, pr.number
+            ORDER BY pr.updated_at_unix DESC
             "#,
         )
         .bind(repo_name)
         .fetch_all(&self.pool)
         .await?;
 
-        rows.into_iter().map(PullRequestRow::into_model).collect()
+        rows.into_iter().map(|row| row.into_model()).collect()
     }
 
     pub async fn get_all_prs(&self) -> anyhow::Result<Vec<PullRequest>> {
-        let rows = sqlx::query_as::<_, PullRequestRow>(
+        // Delegate to the JOIN-based implementation
+        self.get_all_prs_with_comments().await
+    }
+
+    pub async fn get_all_prs_with_comments(&self) -> anyhow::Result<Vec<PullRequest>> {
+        let rows = sqlx::query_as::<_, PullRequestWithCommentsRow>(
             r#"
-            SELECT number, title, repository, author, head_sha, draft, created_at_unix,
-                   updated_at_unix, ci_status, last_comment_unix, last_commit_unix,
-                   last_ci_status_update_unix, last_acknowledged_unix, requested_reviewers,
-                   approval_status, last_review_status_update_unix, user_has_reviewed
-            FROM pull_requests
+            SELECT 
+                pr.number,
+                pr.title,
+                pr.repository,
+                pr.author,
+                pr.head_sha,
+                pr.draft,
+                pr.created_at_unix,
+                pr.updated_at_unix,
+                pr.ci_status,
+                pr.last_comment_unix,
+                pr.last_commit_unix,
+                pr.last_ci_status_update_unix,
+                pr.last_acknowledged_unix,
+                pr.requested_reviewers,
+                pr.approval_status,
+                pr.last_review_status_update_unix,
+                pr.user_has_reviewed,
+                COALESCE(
+                    json_group_array(
+                        json_object(
+                            'id', c.id,
+                            'repository', c.repository,
+                            'pr_number', c.pr_number,
+                            'author', c.author,
+                            'body', c.body,
+                            'created_at_unix', c.created_at_unix,
+                            'updated_at_unix', c.updated_at_unix,
+                            'is_review_comment', c.is_review_comment,
+                            'review_state', c.review_state
+                        )
+                        ORDER BY c.created_at_unix ASC
+                    ),
+                    '[]'
+                ) as comments_json
+            FROM pull_requests pr
+            LEFT JOIN pr_comments c 
+                ON pr.repository = c.repository AND pr.number = c.pr_number
+            GROUP BY pr.repository, pr.number
+            ORDER BY pr.updated_at_unix DESC
             "#,
         )
         .fetch_all(&self.pool)
         .await?;
 
-        rows.into_iter().map(PullRequestRow::into_model).collect()
+        rows.into_iter().map(|row| row.into_model()).collect()
     }
 
     pub async fn get_user(&self) -> anyhow::Result<Option<User>> {
@@ -148,15 +225,48 @@ impl DatabaseRepository {
         repo_name: &str,
         pr_number: i64,
     ) -> anyhow::Result<Option<PullRequest>> {
-        let row = sqlx::query_as::<_, PullRequestRow>(
+        let row = sqlx::query_as::<_, PullRequestWithCommentsRow>(
             r#"
-            SELECT number, title, repository, author, head_sha, draft, created_at_unix,
-                   updated_at_unix, ci_status, last_comment_unix, last_commit_unix,
-                   last_ci_status_update_unix, last_acknowledged_unix, requested_reviewers,
-                   approval_status, last_review_status_update_unix, user_has_reviewed
-            FROM pull_requests
-            WHERE repository = ?1 AND number = ?2
-            LIMIT 1
+            SELECT 
+                pr.number,
+                pr.title,
+                pr.repository,
+                pr.author,
+                pr.head_sha,
+                pr.draft,
+                pr.created_at_unix,
+                pr.updated_at_unix,
+                pr.ci_status,
+                pr.last_comment_unix,
+                pr.last_commit_unix,
+                pr.last_ci_status_update_unix,
+                pr.last_acknowledged_unix,
+                pr.requested_reviewers,
+                pr.approval_status,
+                pr.last_review_status_update_unix,
+                pr.user_has_reviewed,
+                COALESCE(
+                    json_group_array(
+                        json_object(
+                            'id', c.id,
+                            'repository', c.repository,
+                            'pr_number', c.pr_number,
+                            'author', c.author,
+                            'body', c.body,
+                            'created_at_unix', c.created_at_unix,
+                            'updated_at_unix', c.updated_at_unix,
+                            'is_review_comment', c.is_review_comment,
+                            'review_state', c.review_state
+                        )
+                        ORDER BY c.created_at_unix ASC
+                    ),
+                    '[]'
+                ) as comments_json
+            FROM pull_requests pr
+            LEFT JOIN pr_comments c 
+                ON pr.repository = c.repository AND pr.number = c.pr_number
+            WHERE pr.repository = ?1 AND pr.number = ?2
+            GROUP BY pr.repository, pr.number
             "#,
         )
         .bind(repo_name)
@@ -164,7 +274,7 @@ impl DatabaseRepository {
         .fetch_optional(&self.pool)
         .await?;
 
-        row.map(PullRequestRow::into_model).transpose()
+        row.map(|r| r.into_model()).transpose()
     }
 
     pub async fn get_tracked_authors(&self) -> anyhow::Result<Vec<String>> {
@@ -253,6 +363,76 @@ impl DatabaseRepository {
         .await?;
         Ok(())
     }
+
+    pub async fn save_comment(&self, comment: &PrComment) -> anyhow::Result<()> {
+        sqlx::query(
+            r#"
+            INSERT INTO pr_comments (
+                id, repository, pr_number, author, body, created_at_unix,
+                updated_at_unix, is_review_comment, review_state
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
+            ON CONFLICT(id) DO UPDATE SET
+                repository = excluded.repository,
+                pr_number = excluded.pr_number,
+                author = excluded.author,
+                body = excluded.body,
+                created_at_unix = excluded.created_at_unix,
+                updated_at_unix = excluded.updated_at_unix,
+                is_review_comment = excluded.is_review_comment,
+                review_state = excluded.review_state
+            "#,
+        )
+        .bind(&comment.id)
+        .bind(&comment.repository)
+        .bind(comment.pr_number)
+        .bind(&comment.author)
+        .bind(&comment.body)
+        .bind(comment.created_at.timestamp())
+        .bind(comment.updated_at.timestamp())
+        .bind(if comment.is_review_comment { 1i64 } else { 0i64 })
+        .bind(&comment.review_state)
+        .execute(&self.pool)
+        .await?;
+
+        Ok(())
+    }
+
+    pub async fn get_comments_for_pr(
+        &self,
+        repository: &str,
+        pr_number: i64,
+    ) -> anyhow::Result<Vec<PrComment>> {
+        let rows = sqlx::query_as::<_, PrCommentRow>(
+            r#"
+            SELECT id, repository, pr_number, author, body, created_at_unix,
+                   updated_at_unix, is_review_comment, review_state
+            FROM pr_comments
+            WHERE repository = ?1 AND pr_number = ?2
+            ORDER BY created_at_unix ASC
+            "#,
+        )
+        .bind(repository)
+        .bind(pr_number)
+        .fetch_all(&self.pool)
+        .await?;
+
+        rows.into_iter().map(PrCommentRow::into_model).collect()
+    }
+
+    pub async fn delete_comments_for_pr(
+        &self,
+        repository: &str,
+        pr_number: i64,
+    ) -> anyhow::Result<()> {
+        sqlx::query(
+            "DELETE FROM pr_comments WHERE repository = ?1 AND pr_number = ?2",
+        )
+        .bind(repository)
+        .bind(pr_number)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
 }
 
 #[derive(Debug, FromRow)]
@@ -302,6 +482,7 @@ impl PullRequestRow {
                 .transpose()?,
             requested_reviewers,
             user_has_reviewed: self.user_has_reviewed,
+            comments: vec![],
         })
     }
 }
@@ -309,4 +490,127 @@ impl PullRequestRow {
 fn unix_to_datetime(seconds: i64) -> anyhow::Result<DateTime<Utc>> {
     DateTime::from_timestamp(seconds, 0)
         .ok_or_else(|| anyhow::anyhow!("invalid unix timestamp: {seconds}"))
+}
+
+#[derive(Debug, FromRow)]
+struct PrCommentRow {
+    id: String,
+    repository: String,
+    pr_number: i64,
+    author: String,
+    body: String,
+    created_at_unix: i64,
+    updated_at_unix: i64,
+    is_review_comment: i64,
+    review_state: Option<String>,
+}
+
+impl PrCommentRow {
+    fn into_model(self) -> anyhow::Result<PrComment> {
+        Ok(PrComment {
+            id: self.id,
+            repository: self.repository,
+            pr_number: self.pr_number,
+            author: self.author,
+            body: self.body,
+            created_at: unix_to_datetime(self.created_at_unix)?,
+            updated_at: unix_to_datetime(self.updated_at_unix)?,
+            is_review_comment: self.is_review_comment != 0,
+            review_state: self.review_state,
+        })
+    }
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct CommentJson {
+    id: String,
+    repository: String,
+    pr_number: i64,
+    author: String,
+    body: String,
+    created_at_unix: i64,
+    updated_at_unix: i64,
+    is_review_comment: i64,  // stored as 0/1 in JSON
+    review_state: Option<String>,
+}
+
+impl CommentJson {
+    fn into_model(self) -> anyhow::Result<PrComment> {
+        Ok(PrComment {
+            id: self.id,
+            repository: self.repository,
+            pr_number: self.pr_number,
+            author: self.author,
+            body: self.body,
+            created_at: unix_to_datetime(self.created_at_unix)?,
+            updated_at: unix_to_datetime(self.updated_at_unix)?,
+            is_review_comment: self.is_review_comment != 0,
+            review_state: self.review_state,
+        })
+    }
+}
+
+#[derive(Debug, sqlx::FromRow)]
+struct PullRequestWithCommentsRow {
+    number: i64,
+    title: String,
+    repository: String,
+    author: String,
+    head_sha: String,
+    draft: bool,
+    created_at_unix: i64,
+    updated_at_unix: i64,
+    ci_status: i64,
+    last_comment_unix: i64,
+    last_commit_unix: i64,
+    last_ci_status_update_unix: i64,
+    last_acknowledged_unix: Option<i64>,
+    requested_reviewers: String,
+    approval_status: i64,
+    last_review_status_update_unix: i64,
+    user_has_reviewed: bool,
+    comments_json: String,
+}
+
+impl PullRequestWithCommentsRow {
+    fn into_model(self) -> anyhow::Result<PullRequest> {
+        // First, deserialize requested_reviewers (same as PullRequestRow)
+        let requested_reviewers: Vec<String> = serde_json::from_str(&self.requested_reviewers)
+            .map_err(|err| anyhow::anyhow!("unmarshal requested_reviewers: {err}"))?;
+
+        // Deserialize the JSON array of comments
+        let comments: Vec<CommentJson> = serde_json::from_str(&self.comments_json)
+            .map_err(|err| anyhow::anyhow!("unmarshal comments_json: {err}"))?;
+
+        // Convert each CommentJson to PrComment
+        let comments: Vec<PrComment> = comments
+            .into_iter()
+            .map(|c| c.into_model())
+            .collect::<Result<Vec<_>, _>>()?;
+
+        // Build and return the PullRequest (copy the pattern from existing PullRequestRow::into_model)
+        Ok(PullRequest {
+            number: self.number,
+            title: self.title,
+            repository: self.repository,
+            author: self.author,
+            head_sha: self.head_sha,
+            draft: self.draft,
+            created_at: unix_to_datetime(self.created_at_unix)?,
+            updated_at: unix_to_datetime(self.updated_at_unix)?,
+            ci_status: CiStatus::from_i64(self.ci_status),
+            last_comment_at: unix_to_datetime(self.last_comment_unix)?,
+            last_commit_at: unix_to_datetime(self.last_commit_unix)?,
+            last_ci_status_update_at: unix_to_datetime(self.last_ci_status_update_unix)?,
+            approval_status: ApprovalStatus::from_i64(self.approval_status),
+            last_review_status_update_at: unix_to_datetime(self.last_review_status_update_unix)?,
+            last_acknowledged_at: self
+                .last_acknowledged_unix
+                .map(unix_to_datetime)
+                .transpose()?,
+            requested_reviewers,
+            user_has_reviewed: self.user_has_reviewed,
+            comments,  // NEW: populated from JSON
+        })
+    }
 }

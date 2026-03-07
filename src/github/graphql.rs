@@ -38,12 +38,22 @@ query($owner: String!, $name: String!, $cursor: String) {
         }
         comments(last: 100) {
           nodes {
+            id
+            author { login }
+            body
+            createdAt
             updatedAt
           }
         }
         reviews(last: 100) {
           nodes {
+            id
+            author { login }
+            body
+            createdAt
             updatedAt
+            state
+            submittedAt
           }
         }
         latestReviews(first: 100) {
@@ -164,6 +174,11 @@ pub struct CommentConnection {
 
 #[derive(Debug, Deserialize)]
 pub struct CommentNode {
+    pub id: String,
+    pub author: Option<Author>,
+    pub body: String,
+    #[serde(rename = "createdAt")]
+    pub created_at: String,
     #[serde(rename = "updatedAt")]
     pub updated_at: String,
 }
@@ -176,8 +191,16 @@ pub struct ReviewConnection {
 
 #[derive(Debug, Deserialize)]
 pub struct ReviewNode {
+    pub id: String,
+    pub author: Option<Author>,
+    pub body: String,
+    #[serde(rename = "createdAt")]
+    pub created_at: String,
     #[serde(rename = "updatedAt")]
     pub updated_at: String,
+    pub state: String,
+    #[serde(rename = "submittedAt")]
+    pub submitted_at: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -279,12 +302,22 @@ pub fn build_targeted_refresh_query(pr_numbers: &[i64]) -> String {
       }}
       comments(last: 100) {{
         nodes {{
+          id
+          author {{ login }}
+          body
+          createdAt
           updatedAt
         }}
       }}
       reviews(last: 100) {{
         nodes {{
+          id
+          author {{ login }}
+          body
+          createdAt
           updatedAt
+          state
+          submittedAt
         }}
       }}
       latestReviews(first: 100) {{

@@ -124,11 +124,55 @@ fn collect_removed_pull_requests(
         .collect()
 }
 
+/// Result of classifying team members into tracked and untracked groups.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ClassifiedMembers {
+    pub already_tracked: Vec<String>,
+    pub candidates: Vec<String>,
+}
+
+/// Classify team members into already-tracked and new candidates.
+///
+/// Filters out the current user, then splits the remaining members into those
+/// already being tracked and those who are candidates to be added. Both lists
+/// are returned sorted alphabetically.
+pub fn classify_team_members(
+    all_members: Vec<String>,
+    current_user: &str,
+    tracked_authors: &[String],
+) -> ClassifiedMembers {
+    let current_lower = current_user.to_lowercase();
+    let tracked_lower: HashSet<String> = tracked_authors.iter().map(|s| s.to_lowercase()).collect();
+
+    let mut already_tracked = Vec::new();
+    let mut candidates = Vec::new();
+
+    for login in all_members {
+        let lower = login.to_lowercase();
+        if lower == current_lower {
+            continue;
+        }
+        if tracked_lower.contains(&lower) {
+            already_tracked.push(login);
+        } else {
+            candidates.push(login);
+        }
+    }
+
+    already_tracked.sort();
+    candidates.sort();
+
+    ClassifiedMembers {
+        already_tracked,
+        candidates,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use chrono::{DateTime, TimeZone, Utc};
 
-    use super::process_pull_request_sync_results;
+    use super::*;
     use crate::models::{ApprovalStatus, CiStatus, PullRequest};
 
     fn dt(year: i32, month: u32, day: u32, hour: u32) -> DateTime<Utc> {
@@ -338,5 +382,69 @@ mod tests {
             result.updated_prs[0].approval_status,
             ApprovalStatus::Approved
         );
+    }
+
+    // -- classify_team_members tests --
+
+    #[test]
+    fn classify_excludes_current_user() {
+        let members = vec!["Alice".to_string(), "Bob".to_string()];
+        let result = classify_team_members(members, "alice", &[]);
+
+        assert!(result.already_tracked.is_empty());
+        assert_eq!(result.candidates, vec!["Bob"]);
+    }
+
+    #[test]
+    fn classify_splits_tracked_and_candidates() {
+        let members = vec!["Alice".to_string(), "Bob".to_string(), "Carol".to_string()];
+        let tracked = vec!["bob".to_string()];
+        let result = classify_team_members(members, "alice", &tracked);
+
+        assert_eq!(result.already_tracked, vec!["Bob"]);
+        assert_eq!(result.candidates, vec!["Carol"]);
+    }
+
+    #[test]
+    fn classify_case_insensitive_tracking() {
+        let members = vec!["BOB".to_string()];
+        let tracked = vec!["bob".to_string()];
+        let result = classify_team_members(members, "alice", &tracked);
+
+        assert_eq!(result.already_tracked, vec!["BOB"]);
+        assert!(result.candidates.is_empty());
+    }
+
+    #[test]
+    fn classify_returns_sorted_results() {
+        let members = vec![
+            "Zara".to_string(),
+            "Alice".to_string(),
+            "Me".to_string(),
+            "Bob".to_string(),
+        ];
+        let tracked = vec!["zara".to_string()];
+        let result = classify_team_members(members, "me", &tracked);
+
+        assert_eq!(result.already_tracked, vec!["Zara"]);
+        assert_eq!(result.candidates, vec!["Alice", "Bob"]);
+    }
+
+    #[test]
+    fn classify_empty_members_returns_empty() {
+        let result = classify_team_members(vec![], "alice", &["bob".to_string()]);
+
+        assert!(result.already_tracked.is_empty());
+        assert!(result.candidates.is_empty());
+    }
+
+    #[test]
+    fn classify_all_tracked_returns_no_candidates() {
+        let members = vec!["Bob".to_string(), "Carol".to_string()];
+        let tracked = vec!["bob".to_string(), "carol".to_string()];
+        let result = classify_team_members(members, "alice", &tracked);
+
+        assert_eq!(result.already_tracked, vec!["Bob", "Carol"]);
+        assert!(result.candidates.is_empty());
     }
 }

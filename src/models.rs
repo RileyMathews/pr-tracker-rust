@@ -187,6 +187,13 @@ impl PullRequest {
             self.repository, self.number
         )
     }
+
+    pub fn notification_body(&self) -> String {
+        format!(
+            "{}#{} by {} {}",
+            self.repository, self.number, self.author, self.title
+        )
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -378,5 +385,12 @@ mod tests {
 
         assert!(pr.user_is_involved("octocat"));
         assert!(pr.user_is_involved("reviewer"));
+    }
+
+    #[test]
+    fn notification_body_formats_correctly() {
+        let pr = build_pull_request(&[]);
+        let body = pr.notification_body();
+        assert_eq!(body, "owner/repo#42 by octocat Improve all_changes tests");
     }
 }

@@ -1,5 +1,6 @@
 use tokio::sync::mpsc;
 
+use crate::core::classify_team_members;
 use crate::db::DatabaseRepository;
 use crate::github::GitHubClient;
 use crate::sync::{sync_all_tracked_with_progress, SyncRunSummary};
@@ -66,10 +67,6 @@ async fn run_teams_fetch(repo: DatabaseRepository) -> anyhow::Result<TeamsPayloa
     let github = GitHubClient::new(user.access_token.clone())?;
 
     let tracked_authors = repo.get_tracked_authors().await?;
-    let tracked_set: std::collections::HashSet<String> =
-        tracked_authors.iter().map(|s| s.to_lowercase()).collect();
-    let current_login_lower = user.username.to_lowercase();
-
     let teams = github.fetch_user_teams().await?;
 
     let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
@@ -79,23 +76,18 @@ async fn run_teams_fetch(repo: DatabaseRepository) -> anyhow::Result<TeamsPayloa
             .fetch_team_members(&team.organization.login, &team.slug)
             .await?;
         for member in members {
-            let lower = member.login.to_lowercase();
-            if lower != current_login_lower && seen.insert(lower.clone()) {
+            if seen.insert(member.login.to_lowercase()) {
                 all_members.push(member.login);
             }
         }
     }
 
-    let mut untracked: Vec<String> = all_members
-        .into_iter()
-        .filter(|login| !tracked_set.contains(&login.to_lowercase()))
-        .collect();
-    untracked.sort();
+    let classified = classify_team_members(all_members, &user.username, &tracked_authors);
 
-    let mut tracked = tracked_authors;
-    tracked.sort();
-
-    Ok(TeamsPayload { tracked, untracked })
+    Ok(TeamsPayload {
+        tracked: classified.already_tracked,
+        untracked: classified.candidates,
+    })
 }
 
 /// Get a human-readable label for a background job.
@@ -117,6 +109,9 @@ mod tests {
 
     #[test]
     fn background_job_label_teams_fetch() {
-        assert_eq!(background_job_label(BackgroundJob::TeamsFetch), "fetching teams");
+        assert_eq!(
+            background_job_label(BackgroundJob::TeamsFetch),
+            "fetching teams"
+        );
     }
 }

@@ -5,6 +5,7 @@ pub mod github;
 pub mod models;
 pub mod scoring;
 pub mod service;
+pub mod service_mapping;
 pub mod sync;
 pub mod tui;
 

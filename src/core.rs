@@ -4,6 +4,50 @@ use chrono::{DateTime, Utc};
 
 use crate::models::PullRequest;
 
+#[derive(Debug, PartialEq, Eq)]
+pub struct TeamAuthorClassification {
+    pub tracked_teammates: Vec<String>,
+    pub candidates: Vec<String>,
+}
+
+pub fn classify_team_members(
+    current_user_login: &str,
+    existing_tracked_authors: &[String],
+    fetched_team_member_logins: &[String],
+) -> TeamAuthorClassification {
+    let current_login_lower = current_user_login.to_lowercase();
+    let tracked_lower: HashSet<String> = existing_tracked_authors
+        .iter()
+        .map(|login| login.to_lowercase())
+        .collect();
+
+    let mut seen_lower: HashSet<String> = HashSet::new();
+    let mut tracked_teammates: Vec<String> = Vec::new();
+    let mut candidates: Vec<String> = Vec::new();
+
+    for login in fetched_team_member_logins {
+        let lower = login.to_lowercase();
+        if !seen_lower.insert(lower.clone()) {
+            continue;
+        }
+
+        if lower == current_login_lower {
+            continue;
+        }
+
+        if tracked_lower.contains(&lower) {
+            tracked_teammates.push(login.clone());
+        } else {
+            candidates.push(login.clone());
+        }
+    }
+
+    TeamAuthorClassification {
+        tracked_teammates,
+        candidates,
+    }
+}
+
 #[derive(Debug, Default)]
 pub struct SyncDiff {
     pub new_prs: Vec<PullRequest>,
@@ -128,7 +172,7 @@ fn collect_removed_pull_requests(
 mod tests {
     use chrono::{DateTime, TimeZone, Utc};
 
-    use super::process_pull_request_sync_results;
+    use super::{classify_team_members, process_pull_request_sync_results};
     use crate::models::{ApprovalStatus, CiStatus, PullRequest};
 
     fn dt(year: i32, month: u32, day: u32, hour: u32) -> DateTime<Utc> {
@@ -338,5 +382,46 @@ mod tests {
             result.updated_prs[0].approval_status,
             ApprovalStatus::Approved
         );
+    }
+
+    #[test]
+    fn classifies_team_members_with_deduping() {
+        let current_user = "alice";
+        let tracked = vec!["bob".to_string()];
+        let fetched = vec![
+            "bob".to_string(),
+            "carol".to_string(),
+            "bob".to_string(),
+            "carol".to_string(),
+        ];
+
+        let result = classify_team_members(current_user, &tracked, &fetched);
+
+        assert_eq!(result.tracked_teammates, vec!["bob".to_string()]);
+        assert_eq!(result.candidates, vec!["carol".to_string()]);
+    }
+
+    #[test]
+    fn classifies_team_members_case_insensitively() {
+        let current_user = "alice";
+        let tracked = vec!["BOB".to_string()];
+        let fetched = vec!["bOb".to_string(), "CaRoL".to_string()];
+
+        let result = classify_team_members(current_user, &tracked, &fetched);
+
+        assert_eq!(result.tracked_teammates, vec!["bOb".to_string()]);
+        assert_eq!(result.candidates, vec!["CaRoL".to_string()]);
+    }
+
+    #[test]
+    fn classifies_team_members_excluding_self() {
+        let current_user = "Alice";
+        let tracked = vec![];
+        let fetched = vec!["ALICE".to_string(), "bob".to_string()];
+
+        let result = classify_team_members(current_user, &tracked, &fetched);
+
+        assert!(result.tracked_teammates.is_empty());
+        assert_eq!(result.candidates, vec!["bob".to_string()]);
     }
 }

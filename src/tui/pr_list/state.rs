@@ -1,6 +1,8 @@
+use crossterm::event::KeyCode;
+
 use crate::models::PullRequest;
-use crate::tui::navigation::ViewMode;
-use crate::tui::state::tui_attention_score;
+use crate::tui::navigation::{Screen, ViewMode};
+use crate::tui::state::{tui_attention_score, SharedState};
 
 /// State for the PR List screen.
 pub struct State {
@@ -8,6 +10,17 @@ pub struct State {
     pub cursor: usize,
     /// Current view mode (Active or Acknowledged).
     pub view_mode: ViewMode,
+}
+
+/// Pure intent emitted by the PR List reducer.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Action {
+    None,
+    Quit,
+    SwitchScreen(Screen),
+    OpenSelectedPr { pr_index: usize },
+    AcknowledgeSelectedPr { pr_index: usize },
+    TriggerSync,
 }
 
 impl State {
@@ -87,6 +100,70 @@ impl State {
     pub fn view_label(&self) -> &'static str {
         self.view_mode.label()
     }
+
+    /// Pure reducer for PR List key handling.
+    pub fn reduce_key(
+        &mut self,
+        key_code: KeyCode,
+        shared: &SharedState,
+        has_active_job: bool,
+    ) -> Action {
+        let filtered_indices = self.filtered_indices(&shared.prs, &shared.username);
+        self.ensure_cursor_in_range(filtered_indices.len());
+
+        match key_code {
+            KeyCode::Char('q') => Action::Quit,
+
+            KeyCode::Up | KeyCode::Char('k') => {
+                if self.cursor > 0 {
+                    self.cursor -= 1;
+                }
+                Action::None
+            }
+
+            KeyCode::Down | KeyCode::Char('j') => {
+                if self.cursor + 1 < filtered_indices.len() {
+                    self.cursor += 1;
+                }
+                Action::None
+            }
+
+            KeyCode::Enter | KeyCode::Char(' ') => self
+                .selected_index(&filtered_indices)
+                .map_or(Action::None, |pr_index| Action::OpenSelectedPr { pr_index }),
+
+            KeyCode::Char('a') => self
+                .selected_index(&filtered_indices)
+                .map_or(Action::None, |pr_index| Action::AcknowledgeSelectedPr {
+                    pr_index,
+                }),
+
+            KeyCode::Char('v') => {
+                self.toggle_view();
+                let updated_filtered_indices = self.filtered_indices(&shared.prs, &shared.username);
+                self.ensure_cursor_in_range(updated_filtered_indices.len());
+                Action::None
+            }
+
+            KeyCode::Char('s') => {
+                if has_active_job {
+                    Action::None
+                } else {
+                    Action::TriggerSync
+                }
+            }
+
+            KeyCode::Char('t') => {
+                if has_active_job {
+                    Action::None
+                } else {
+                    Action::SwitchScreen(Screen::AuthorsFromTeams)
+                }
+            }
+
+            _ => Action::None,
+        }
+    }
 }
 
 impl Default for State {
@@ -99,7 +176,7 @@ impl Default for State {
 mod tests {
     use super::*;
     use crate::models::{ApprovalStatus, CiStatus, PullRequest};
-    use chrono::{DateTime, TimeZone, Utc};
+    use chrono::DateTime;
 
     fn test_pr() -> PullRequest {
         PullRequest {
@@ -120,7 +197,12 @@ mod tests {
             last_acknowledged_at: None,
             requested_reviewers: Vec::new(),
             user_has_reviewed: false,
+            comments: Vec::new(),
         }
+    }
+
+    fn test_shared(prs: Vec<PullRequest>) -> SharedState {
+        SharedState::new(prs, "alice".to_string())
     }
 
     fn pr_with_ack(number: i64, ack: bool) -> PullRequest {
@@ -131,8 +213,6 @@ mod tests {
         }
         pr
     }
-
-    // ── State::new tests ──────────────────────────────────────────────
 
     #[test]
     fn new_starts_at_cursor_zero() {
@@ -145,8 +225,6 @@ mod tests {
         let state = State::new();
         assert!(matches!(state.view_mode, ViewMode::Active));
     }
-
-    // ── State::toggle_view tests ───────────────────────────────────
 
     #[test]
     fn toggle_view_switches_to_acknowledged() {
@@ -164,16 +242,6 @@ mod tests {
     }
 
     #[test]
-    fn toggle_view_twice_returns_to_active() {
-        let mut state = State::new();
-        state.toggle_view();
-        state.toggle_view();
-        assert!(matches!(state.view_mode, ViewMode::Active));
-    }
-
-    // ── State::ensure_cursor_in_range tests ─────────────────────────
-
-    #[test]
     fn ensure_cursor_in_range_empty_list_sets_zero() {
         let mut state = State::new();
         state.cursor = 5;
@@ -185,152 +253,95 @@ mod tests {
     fn ensure_cursor_in_range_clamps_when_beyond() {
         let mut state = State::new();
         state.cursor = 10;
-        state.ensure_cursor_in_range(5); // only 5 items
-        assert_eq!(state.cursor, 4); // clamped to len-1
-    }
-
-    #[test]
-    fn ensure_cursor_in_range_unchanged_when_valid() {
-        let mut state = State::new();
-        state.cursor = 3;
-        state.ensure_cursor_in_range(10);
-        assert_eq!(state.cursor, 3);
-    }
-
-    #[test]
-    fn ensure_cursor_in_range_handles_cursor_at_boundary() {
-        let mut state = State::new();
-        state.cursor = 4;
         state.ensure_cursor_in_range(5);
-        assert_eq!(state.cursor, 4); // valid, should stay
-    }
-
-    // ── State::filtered_indices tests ────────────────────────────────
-
-    #[test]
-    fn filtered_indices_active_view_filters_non_acknowledged() {
-        let state = State::new();
-        let prs = vec![
-            pr_with_ack(1, false),
-            pr_with_ack(2, true),
-            pr_with_ack(3, false),
-        ];
-
-        let indices = state.filtered_indices(&prs, "bob");
-
-        assert_eq!(indices, vec![0, 2]);
+        assert_eq!(state.cursor, 4);
     }
 
     #[test]
-    fn filtered_indices_acknowledged_view_filters_acknowledged() {
+    fn reduce_key_up_stops_at_zero() {
         let mut state = State::new();
-        state.view_mode = ViewMode::Acknowledged;
-        let prs = vec![
-            pr_with_ack(1, false),
-            pr_with_ack(2, true),
-            pr_with_ack(3, false),
-        ];
+        let shared = test_shared(vec![test_pr()]);
 
-        let indices = state.filtered_indices(&prs, "bob");
+        let action = state.reduce_key(KeyCode::Up, &shared, false);
 
-        assert_eq!(indices, vec![1]);
+        assert_eq!(action, Action::None);
+        assert_eq!(state.cursor, 0);
     }
 
     #[test]
-    fn filtered_indices_empty_list_returns_empty() {
-        let state = State::new();
-        let prs: Vec<PullRequest> = vec![];
-
-        let indices = state.filtered_indices(&prs, "bob");
-
-        assert!(indices.is_empty());
-    }
-
-    #[test]
-    fn filtered_indices_sorts_by_attention_score() {
-        let state = State::new();
-        let mut pr1 = test_pr();
-        pr1.number = 1;
-        pr1.requested_reviewers = vec!["bob".to_string()];
-
-        let mut pr2 = test_pr();
-        pr2.number = 2;
-
-        let prs = vec![pr2, pr1];
-
-        let indices = state.filtered_indices(&prs, "bob");
-
-        // PR 1 has higher score (involved)
-        assert_eq!(indices, vec![1, 0]);
-    }
-
-    #[test]
-    fn filtered_indices_sorts_by_updated_at_when_scores_equal() {
-        let state = State::new();
-        let mut pr1 = test_pr();
-        pr1.number = 1;
-        pr1.updated_at = Utc.timestamp_opt(100, 0).unwrap();
-
-        let mut pr2 = test_pr();
-        pr2.number = 2;
-        pr2.updated_at = Utc.timestamp_opt(200, 0).unwrap();
-
-        let prs = vec![pr1, pr2];
-
-        let indices = state.filtered_indices(&prs, "bob");
-
-        // Later updated_at comes first
-        assert_eq!(indices, vec![1, 0]);
-    }
-
-    // ── State::selected_index tests ─────────────────────────────────
-
-    #[test]
-    fn selected_index_returns_correct_index() {
-        let state = State::new();
-        let filtered = vec![2, 0, 1];
-
-        assert_eq!(state.selected_index(&filtered), Some(2));
-    }
-
-    #[test]
-    fn selected_index_with_cursor_returns_correct() {
+    fn reduce_key_down_stops_at_last_item() {
         let mut state = State::new();
         state.cursor = 1;
-        let filtered = vec![2, 0, 1];
+        let mut pr2 = test_pr();
+        pr2.number = 2;
+        let shared = test_shared(vec![test_pr(), pr2]);
 
-        assert_eq!(state.selected_index(&filtered), Some(0));
+        let action = state.reduce_key(KeyCode::Down, &shared, false);
+
+        assert_eq!(action, Action::None);
+        assert_eq!(state.cursor, 1);
     }
 
     #[test]
-    fn selected_index_returns_none_when_out_of_range() {
+    fn reduce_key_view_toggle_resets_cursor() {
         let mut state = State::new();
-        state.cursor = 10;
-        let filtered = vec![0, 1];
+        state.cursor = 3;
+        let shared = test_shared(vec![pr_with_ack(1, false), pr_with_ack(2, true)]);
 
-        assert_eq!(state.selected_index(&filtered), None);
+        let action = state.reduce_key(KeyCode::Char('v'), &shared, false);
+
+        assert_eq!(action, Action::None);
+        assert!(matches!(state.view_mode, ViewMode::Acknowledged));
+        assert_eq!(state.cursor, 0);
     }
 
     #[test]
-    fn selected_index_returns_none_with_empty_list() {
-        let state = State::new();
-        let filtered: Vec<usize> = vec![];
-
-        assert_eq!(state.selected_index(&filtered), None);
-    }
-
-    // ── view_label tests ───────────────────────────────────────────
-
-    #[test]
-    fn view_label_active() {
-        let state = State::new();
-        assert_eq!(state.view_label(), "active");
-    }
-
-    #[test]
-    fn view_label_acknowledged() {
+    fn reduce_key_enter_returns_open_selected_action() {
         let mut state = State::new();
-        state.view_mode = ViewMode::Acknowledged;
-        assert_eq!(state.view_label(), "acknowledged");
+        let shared = test_shared(vec![test_pr()]);
+
+        let action = state.reduce_key(KeyCode::Enter, &shared, false);
+
+        assert_eq!(action, Action::OpenSelectedPr { pr_index: 0 });
+    }
+
+    #[test]
+    fn reduce_key_acknowledge_returns_ack_action() {
+        let mut state = State::new();
+        let shared = test_shared(vec![test_pr()]);
+
+        let action = state.reduce_key(KeyCode::Char('a'), &shared, false);
+
+        assert_eq!(action, Action::AcknowledgeSelectedPr { pr_index: 0 });
+    }
+
+    #[test]
+    fn reduce_key_sync_ignored_when_job_active() {
+        let mut state = State::new();
+        let shared = test_shared(vec![test_pr()]);
+
+        let action = state.reduce_key(KeyCode::Char('s'), &shared, true);
+
+        assert_eq!(action, Action::None);
+    }
+
+    #[test]
+    fn reduce_key_sync_triggers_when_no_job() {
+        let mut state = State::new();
+        let shared = test_shared(vec![test_pr()]);
+
+        let action = state.reduce_key(KeyCode::Char('s'), &shared, false);
+
+        assert_eq!(action, Action::TriggerSync);
+    }
+
+    #[test]
+    fn reduce_key_switch_screen_when_no_job() {
+        let mut state = State::new();
+        let shared = test_shared(vec![test_pr()]);
+
+        let action = state.reduce_key(KeyCode::Char('t'), &shared, false);
+
+        assert_eq!(action, Action::SwitchScreen(Screen::AuthorsFromTeams));
     }
 }

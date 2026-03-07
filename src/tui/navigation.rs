@@ -1,12 +1,12 @@
 /// Which screen is currently being displayed.
-#[derive(Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Screen {
     PrList,
     AuthorsFromTeams,
 }
 
 /// Which view mode for the PR list.
-#[derive(Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ViewMode {
     Active,
     Acknowledged,
@@ -31,7 +31,7 @@ impl ViewMode {
 }
 
 /// Which pane is focused on the Authors screen.
-#[derive(Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AuthorsPane {
     Tracked,
     Untracked,

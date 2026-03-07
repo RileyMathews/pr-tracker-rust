@@ -1,11 +1,12 @@
-use std::collections::HashSet;
 use std::sync::Arc;
 
 use chrono::{DateTime, Utc};
 use tokio::sync::Semaphore;
 use tokio::task::JoinSet;
 
-use crate::core::{process_pull_request_sync_results, SyncDiff};
+use crate::core::{
+    build_repo_sync_plan, process_pull_request_sync_results, project_closed_pull_requests, SyncDiff,
+};
 use crate::db::DatabaseRepository;
 use crate::github::GitHubClient;
 use crate::models::{PullRequest, TrackedRepository};
@@ -177,15 +178,20 @@ async fn sync_single_repo(
     .await?;
 
     // Step 3: Phase 2 — Targeted Refresh
-    // Collect ALL PR numbers to refresh: existing + newly discovered
-    let mut all_pr_numbers = known_pr_numbers;
-    all_pr_numbers.extend(&new_pr_numbers);
+    let sync_plan = build_repo_sync_plan(&known_pr_numbers, &new_pr_numbers, max_updated_at);
 
-    let (fresh_prs, all_comments, closed_pr_numbers) = if all_pr_numbers.is_empty() {
-        (Vec::new(), Vec::new(), Vec::new())
-    } else {
-        service::fetch_pull_requests_by_number(github, repo_name, &all_pr_numbers, username).await?
-    };
+    let (fresh_prs, all_comments, closed_pr_numbers) =
+        if sync_plan.all_pr_numbers_to_refresh.is_empty() {
+            (Vec::new(), Vec::new(), Vec::new())
+        } else {
+            service::fetch_pull_requests_by_number(
+                github,
+                repo_name,
+                &sync_plan.all_pr_numbers_to_refresh,
+                username,
+            )
+            .await?
+        };
 
     // Step 4: Diff & persist
     // Use process_pull_request_sync_results for open PRs (same as before)
@@ -204,8 +210,10 @@ async fn sync_single_repo(
         repository.save_pr(pr).await?;
     }
 
+    let closed_projection = project_closed_pull_requests(&existing_prs, &closed_pr_numbers);
+
     // Delete closed/merged/deleted PRs explicitly
-    for pr_number in &closed_pr_numbers {
+    for pr_number in &closed_projection.closed_pr_numbers {
         repository.delete_pr(repo_name, *pr_number).await?;
     }
 
@@ -216,31 +224,19 @@ async fn sync_single_repo(
 
     // Step 5: Update last_synced_at
     // Store the GitHub-side timestamp watermark (not local clock)
-    if let Some(max_ts) = max_updated_at {
-        // Subtract 1 second to create a small overlap window, ensuring PRs
-        // updated at exactly the watermark timestamp are re-scanned next time.
-        // These PRs will already be in our DB from this sync, so the overlap
-        // just causes them to appear in discovery (where they'll be filtered
-        // out as known PRs).
-        let watermark = max_ts - chrono::Duration::seconds(1);
+    if let Some(watermark) = sync_plan.watermark_to_persist {
         repository
             .update_tracked_repository_last_synced_at(repo_name, watermark)
             .await?;
     }
 
     // Step 6: Build result
-    let closed_set: HashSet<i64> = closed_pr_numbers.iter().copied().collect();
-    let deleted_prs: Vec<PullRequest> = existing_prs
-        .into_iter()
-        .filter(|pr| closed_set.contains(&pr.number))
-        .collect();
-
     Ok(RepoSyncResult {
         repo_name: repo_name.clone(),
         repo_index,
         new_prs,
         updated_prs,
-        deleted_prs,
+        deleted_prs: closed_projection.deleted_prs,
     })
 }
 

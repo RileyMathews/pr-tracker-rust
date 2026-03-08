@@ -94,6 +94,17 @@ pub struct PullRequest {
 }
 
 impl PullRequest {
+    pub fn comment_count_since_last_ack(&self) -> usize {
+        match self.last_acknowledged_at {
+            Some(last_ack) => self
+                .comments
+                .iter()
+                .filter(|comment| comment.created_at > last_ack)
+                .count(),
+            None => self.comments.len(),
+        }
+    }
+
     pub fn is_acknowledged(&self) -> bool {
         let Some(last_ack) = self.last_acknowledged_at else {
             return false;
@@ -150,7 +161,10 @@ impl PullRequest {
         if let Some(last_ack) = self.last_acknowledged_at {
             let mut updates = String::from("  ");
             if self.last_comment_at > last_ack {
-                updates.push_str("New Comment | ");
+                updates.push_str(&format!(
+                    "New Comments ({}) | ",
+                    self.comment_count_since_last_ack()
+                ));
             }
             if self.last_commit_at > last_ack {
                 updates.push_str("New Commits | ");
@@ -378,5 +392,68 @@ mod tests {
 
         assert!(pr.user_is_involved("octocat"));
         assert!(pr.user_is_involved("reviewer"));
+    }
+
+    #[test]
+    fn comment_count_since_last_ack_counts_only_new_comments() {
+        let mut pr =
+            build_pull_request(&[TestPrEvent::Comment, TestPrEvent::Ack, TestPrEvent::Comment]);
+        pr.comments = vec![
+            PrComment {
+                id: "1".to_string(),
+                repository: "owner/repo".to_string(),
+                pr_number: 42,
+                author: "octocat".to_string(),
+                body: "before ack".to_string(),
+                created_at: timestamp(2),
+                updated_at: timestamp(2),
+                is_review_comment: false,
+                review_state: None,
+            },
+            PrComment {
+                id: "2".to_string(),
+                repository: "owner/repo".to_string(),
+                pr_number: 42,
+                author: "octocat".to_string(),
+                body: "after ack".to_string(),
+                created_at: timestamp(4),
+                updated_at: timestamp(4),
+                is_review_comment: false,
+                review_state: None,
+            },
+        ];
+
+        assert_eq!(pr.comment_count_since_last_ack(), 1);
+    }
+
+    #[test]
+    fn updates_since_last_ack_includes_new_comment_count() {
+        let mut pr = build_pull_request(&[TestPrEvent::Ack, TestPrEvent::Comment]);
+        pr.comments = vec![
+            PrComment {
+                id: "1".to_string(),
+                repository: "owner/repo".to_string(),
+                pr_number: 42,
+                author: "octocat".to_string(),
+                body: "after ack".to_string(),
+                created_at: timestamp(3),
+                updated_at: timestamp(3),
+                is_review_comment: false,
+                review_state: None,
+            },
+            PrComment {
+                id: "2".to_string(),
+                repository: "owner/repo".to_string(),
+                pr_number: 42,
+                author: "octocat".to_string(),
+                body: "after ack 2".to_string(),
+                created_at: timestamp(4),
+                updated_at: timestamp(4),
+                is_review_comment: false,
+                review_state: None,
+            },
+        ];
+
+        assert!(pr.updates_since_last_ack().contains("New Comments (2)"));
     }
 }

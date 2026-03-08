@@ -146,11 +146,28 @@ impl PullRequest {
         })
     }
 
+    pub fn new_comment_count_since_ack(&self) -> usize {
+        match self.last_acknowledged_at {
+            None => self.comments.len(),
+            Some(last_ack) => self
+                .comments
+                .iter()
+                .filter(|c| c.created_at > last_ack)
+                .count(),
+        }
+    }
+
     pub fn updates_since_last_ack(&self) -> String {
         if let Some(last_ack) = self.last_acknowledged_at {
             let mut updates = String::from("  ");
             if self.last_comment_at > last_ack {
-                updates.push_str("New Comment | ");
+                let count = self
+                    .comments
+                    .iter()
+                    .filter(|c| c.created_at > last_ack)
+                    .count();
+                let noun = if count == 1 { "Comment" } else { "Comments" };
+                updates.push_str(&format!("{count} New {noun} | "));
             }
             if self.last_commit_at > last_ack {
                 updates.push_str("New Commits | ");

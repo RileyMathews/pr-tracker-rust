@@ -60,10 +60,7 @@ pub async fn run() -> anyhow::Result<()> {
 }
 
 /// Set up terminal and run the TUI inner loop.
-async fn run_tui(
-    app_state: AppState,
-    repo: &DatabaseRepository,
-) -> anyhow::Result<()> {
+async fn run_tui(app_state: AppState, repo: &DatabaseRepository) -> anyhow::Result<()> {
     enable_raw_mode()?;
     let mut stdout = io::stdout();
     stdout.execute(EnterAlternateScreen)?;

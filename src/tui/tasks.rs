@@ -117,6 +117,9 @@ mod tests {
 
     #[test]
     fn background_job_label_teams_fetch() {
-        assert_eq!(background_job_label(BackgroundJob::TeamsFetch), "fetching teams");
+        assert_eq!(
+            background_job_label(BackgroundJob::TeamsFetch),
+            "fetching teams"
+        );
     }
 }

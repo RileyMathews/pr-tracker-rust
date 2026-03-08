@@ -186,10 +186,10 @@ fn map_comments_from_pr(repo_name: &str, pr: &graphql::PullRequestNode) -> Vec<P
             .map(|a| a.login.clone())
             .unwrap_or_else(|| "unknown".to_string());
 
-        let created_at = parse_github_timestamp(&comment.created_at)
-            .unwrap_or(DateTime::UNIX_EPOCH);
-        let updated_at = parse_github_timestamp(&comment.updated_at)
-            .unwrap_or(DateTime::UNIX_EPOCH);
+        let created_at =
+            parse_github_timestamp(&comment.created_at).unwrap_or(DateTime::UNIX_EPOCH);
+        let updated_at =
+            parse_github_timestamp(&comment.updated_at).unwrap_or(DateTime::UNIX_EPOCH);
 
         comments.push(PrComment {
             id: comment.id.clone(),
@@ -212,10 +212,8 @@ fn map_comments_from_pr(repo_name: &str, pr: &graphql::PullRequestNode) -> Vec<P
             .map(|a| a.login.clone())
             .unwrap_or_else(|| "unknown".to_string());
 
-        let created_at = parse_github_timestamp(&review.created_at)
-            .unwrap_or(DateTime::UNIX_EPOCH);
-        let updated_at = parse_github_timestamp(&review.updated_at)
-            .unwrap_or(DateTime::UNIX_EPOCH);
+        let created_at = parse_github_timestamp(&review.created_at).unwrap_or(DateTime::UNIX_EPOCH);
+        let updated_at = parse_github_timestamp(&review.updated_at).unwrap_or(DateTime::UNIX_EPOCH);
 
         comments.push(PrComment {
             id: review.id.clone(),

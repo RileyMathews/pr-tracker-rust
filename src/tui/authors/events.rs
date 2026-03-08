@@ -62,12 +62,8 @@ pub async fn handle_event(
 
         KeyCode::Down | KeyCode::Char('j') => {
             let filtered_len = match state.focus {
-                AuthorsPane::Tracked => {
-                    state.filtered_list(&state.tracked).len()
-                }
-                AuthorsPane::Untracked => {
-                    state.filtered_list(&state.untracked).len()
-                }
+                AuthorsPane::Tracked => state.filtered_list(&state.tracked).len(),
+                AuthorsPane::Untracked => state.filtered_list(&state.untracked).len(),
             };
             let cursor = match state.focus {
                 AuthorsPane::Tracked => &mut state.tracked_cursor,
@@ -78,34 +74,32 @@ pub async fn handle_event(
             }
         }
 
-        KeyCode::Enter | KeyCode::Char(' ') => {
-            match state.focus {
-                AuthorsPane::Untracked => {
-                    let filtered = state.filtered_list(&state.untracked);
-                    let cursor = state.untracked_cursor;
-                    if let Some(&(orig_idx, _)) = filtered.get(cursor) {
-                        let login = state.untracked.remove(orig_idx);
-                        repo.save_tracked_author(&login).await?;
-                        state.tracked.push(login);
-                        state.tracked.sort();
-                        state.search_query.clear();
-                        state.clamp_cursors();
-                    }
-                }
-                AuthorsPane::Tracked => {
-                    let filtered = state.filtered_list(&state.tracked);
-                    let cursor = state.tracked_cursor;
-                    if let Some(&(orig_idx, _)) = filtered.get(cursor) {
-                        let login = state.tracked.remove(orig_idx);
-                        repo.delete_tracked_author(&login).await?;
-                        state.untracked.push(login);
-                        state.untracked.sort();
-                        state.search_query.clear();
-                        state.clamp_cursors();
-                    }
+        KeyCode::Enter | KeyCode::Char(' ') => match state.focus {
+            AuthorsPane::Untracked => {
+                let filtered = state.filtered_list(&state.untracked);
+                let cursor = state.untracked_cursor;
+                if let Some(&(orig_idx, _)) = filtered.get(cursor) {
+                    let login = state.untracked.remove(orig_idx);
+                    repo.save_tracked_author(&login).await?;
+                    state.tracked.push(login);
+                    state.tracked.sort();
+                    state.search_query.clear();
+                    state.clamp_cursors();
                 }
             }
-        }
+            AuthorsPane::Tracked => {
+                let filtered = state.filtered_list(&state.tracked);
+                let cursor = state.tracked_cursor;
+                if let Some(&(orig_idx, _)) = filtered.get(cursor) {
+                    let login = state.tracked.remove(orig_idx);
+                    repo.delete_tracked_author(&login).await?;
+                    state.untracked.push(login);
+                    state.untracked.sort();
+                    state.search_query.clear();
+                    state.clamp_cursors();
+                }
+            }
+        },
 
         KeyCode::Backspace => {
             state.search_query.pop();

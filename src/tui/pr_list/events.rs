@@ -69,7 +69,8 @@ pub async fn handle_event(
                 repo.save_pr(&pr).await?;
                 shared.prs[pr_index] = pr;
 
-                let updated_filtered_indices = state.filtered_indices(&shared.prs, &shared.username);
+                let updated_filtered_indices =
+                    state.filtered_indices(&shared.prs, &shared.username);
                 state.ensure_cursor_in_range(updated_filtered_indices.len());
             }
             Ok(EventResult::Continue)
@@ -105,10 +106,7 @@ pub async fn handle_event(
 
 /// Helper function to get the currently selected PR.
 /// Used when acknowledging or opening PRs.
-pub fn get_selected_pr<'a>(
-    state: &State,
-    shared: &'a SharedState,
-) -> Option<&'a PullRequest> {
+pub fn get_selected_pr<'a>(state: &State, shared: &'a SharedState) -> Option<&'a PullRequest> {
     let filtered_indices = state.filtered_indices(&shared.prs, &shared.username);
     state
         .selected_index(&filtered_indices)

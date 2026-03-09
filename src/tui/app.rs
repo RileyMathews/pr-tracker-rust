@@ -104,12 +104,15 @@ async fn run_tui_inner(
 
                     // Reload PRs from database
                     app_state.shared.prs = repo.get_all_prs().await?;
-                    let filtered_indices = app_state
+                    let tracked_len = app_state
                         .pr_list
-                        .filtered_indices(&app_state.shared.prs, &app_state.shared.username);
-                    app_state
+                        .tracked_indices(&app_state.shared.prs, &app_state.shared.username)
+                        .len();
+                    let mine_len = app_state
                         .pr_list
-                        .ensure_cursor_in_range(filtered_indices.len());
+                        .mine_indices(&app_state.shared.prs, &app_state.shared.username)
+                        .len();
+                    app_state.pr_list.clamp_cursors(tracked_len, mine_len);
                 }
                 BackgroundMessage::TeamsFetchFinished(result) => {
                     active_job = None;

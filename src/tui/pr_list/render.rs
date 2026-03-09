@@ -1,9 +1,10 @@
 use ratatui::layout::{Constraint, Direction, Layout};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, List, ListItem, ListState, Paragraph};
+use ratatui::widgets::{Block, Borders, HighlightSpacing, List, ListItem, ListState, Paragraph};
 
 use crate::models::PullRequest;
+use crate::tui::navigation::PrPane;
 use crate::tui::pr_list::State;
 use crate::tui::state::{title_case, truncate, SharedState};
 use crate::tui::tasks::{background_job_label, BackgroundJob};
@@ -19,9 +20,10 @@ pub fn draw(
     active_job: Option<BackgroundJob>,
     spinner_tick: usize,
 ) {
-    let filtered_indices = state.filtered_indices(&shared.prs, &shared.username);
+    let tracked_indices = state.tracked_indices(&shared.prs, &shared.username);
+    let mine_indices = state.mine_indices(&shared.prs, &shared.username);
     let selected = state
-        .selected_index(&filtered_indices)
+        .selected_index_for_focus(&shared.prs, &shared.username)
         .and_then(|index| shared.prs.get(index));
 
     let chunks = Layout::default()
@@ -33,7 +35,11 @@ pub fn draw(
         ])
         .split(frame.area());
 
-    // Header
+    let focus_label = match state.focus {
+        PrPane::Tracked => "tracked",
+        PrPane::Mine => "mine",
+    };
+
     let header = Paragraph::new(Line::from(vec![
         Span::styled(
             "PR Tracker",
@@ -43,13 +49,23 @@ pub fn draw(
         ),
         Span::raw("  |  "),
         Span::styled(
-            format!("{} PRs", filtered_indices.len()),
+            format!("tracked: {}", tracked_indices.len()),
+            Style::default().fg(Color::White),
+        ),
+        Span::raw("  |  "),
+        Span::styled(
+            format!("mine: {}", mine_indices.len()),
             Style::default().fg(Color::White),
         ),
         Span::raw("  |  "),
         Span::styled(
             format!("view: {}", state.view_label()),
             Style::default().fg(Color::LightCyan),
+        ),
+        Span::raw("  |  "),
+        Span::styled(
+            format!("focus: {focus_label}"),
+            Style::default().fg(Color::Gray),
         ),
         Span::raw("  |  "),
         Span::styled(
@@ -63,77 +79,30 @@ pub fn draw(
     .block(Block::default().borders(Borders::ALL).title("Overview"));
     frame.render_widget(header, chunks[0]);
 
-    // PR List
-    let items: Vec<ListItem<'_>> = filtered_indices
-        .iter()
-        .map(|pr_index| &shared.prs[*pr_index])
-        .enumerate()
-        .map(|(index, pr)| {
-            let ci_style = ci_style(pr.ci_status);
-            let row_style = if index % 2 == 0 {
-                Style::default().fg(Color::White)
-            } else {
-                Style::default().fg(Color::Gray)
-            };
-            ListItem::new(vec![
-                Line::from(vec![
-                    Span::styled(
-                        format!("#{:<6}", pr.number),
-                        Style::default().fg(Color::Blue),
-                    ),
-                    Span::styled(
-                        format!("{} ", pr.author),
-                        row_style.add_modifier(Modifier::BOLD),
-                    ),
-                    Span::styled(truncate(&pr.title, 72), row_style),
-                ]),
-                Line::from(vec![
-                    Span::styled("repo: ", Style::default().fg(Color::DarkGray)),
-                    Span::styled(&pr.repository, Style::default().fg(Color::White)),
-                    Span::raw("  "),
-                    Span::styled("ci: ", Style::default().fg(Color::DarkGray)),
-                    Span::styled(
-                        ci_label(pr.ci_status),
-                        ci_style.add_modifier(Modifier::BOLD),
-                    ),
-                    if pr.draft {
-                        Span::styled("  draft", Style::default().fg(Color::Magenta))
-                    } else {
-                        Span::raw("")
-                    },
-                    approval_badge(pr),
-                    involved_badge(pr, &shared.username),
-                    review_badge(pr, &shared.username),
-                ]),
-                Line::from(Span::styled(
-                    pr.updates_since_last_ack(),
-                    Style::default().fg(Color::DarkGray),
-                )),
-                Line::raw(""),
-            ])
-        })
-        .collect();
+    let panes = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
+        .split(chunks[1]);
 
-    let list = List::new(items)
-        .block(
-            Block::default()
-                .title(format!("{} Pull Requests", title_case(state.view_label())))
-                .borders(Borders::ALL),
-        )
-        .highlight_style(
-            Style::default()
-                .bg(Color::Rgb(48, 56, 68))
-                .add_modifier(Modifier::BOLD),
-        )
-        .highlight_symbol("▸ ");
+    draw_pr_pane(
+        frame,
+        panes[0],
+        "Tracked PRs",
+        &tracked_indices,
+        state.cursor_for(PrPane::Tracked),
+        state.focus == PrPane::Tracked,
+        shared,
+    );
+    draw_pr_pane(
+        frame,
+        panes[1],
+        "My PRs",
+        &mine_indices,
+        state.cursor_for(PrPane::Mine),
+        state.focus == PrPane::Mine,
+        shared,
+    );
 
-    let mut list_state = ListState::default();
-    if !filtered_indices.is_empty() {
-        list_state.select(Some(state.cursor));
-    }
-    frame.render_stateful_widget(list, chunks[1], &mut list_state);
-
-    // Footer with keybindings and spinner
     let spinner = match active_job {
         Some(job) => format!(
             "  |  {} {}",
@@ -144,17 +113,102 @@ pub fn draw(
     };
 
     let footer = Paragraph::new(format!(
-        "j/k or arrows: move  |  enter/space: open PR  |  a: acknowledge  |  v: toggle view  |  s: full sync  |  t: authors from teams  |  q: quit{}",
+        "tab: switch pane  |  j/k or arrows: move  |  enter/space: open PR  |  a: acknowledge  |  v: toggle view  |  s: full sync  |  t: authors from teams  |  q: quit{}",
         spinner
     ))
     .block(Block::default().borders(Borders::TOP));
     frame.render_widget(footer, chunks[2]);
 }
 
-/// Get the currently selected PR (if any) from state and shared data.
-pub fn get_selected_pr<'a>(state: &State, shared: &'a SharedState) -> Option<&'a PullRequest> {
-    let filtered_indices = state.filtered_indices(&shared.prs, &shared.username);
-    state
-        .selected_index(&filtered_indices)
-        .and_then(|index| shared.prs.get(index))
+fn draw_pr_pane(
+    frame: &mut ratatui::Frame<'_>,
+    area: ratatui::layout::Rect,
+    title: &str,
+    indices: &[usize],
+    cursor: usize,
+    focused: bool,
+    shared: &SharedState,
+) {
+    let items: Vec<ListItem<'_>> = indices
+        .iter()
+        .map(|pr_index| &shared.prs[*pr_index])
+        .enumerate()
+        .map(|(index, pr)| build_list_item(index, pr, &shared.username))
+        .collect();
+
+    let border_style = if focused {
+        Style::default().fg(Color::Cyan)
+    } else {
+        Style::default().fg(Color::DarkGray)
+    };
+
+    let list = List::new(items)
+        .block(
+            Block::default()
+                .title(format!("{} ({})", title_case(title), indices.len()))
+                .borders(Borders::ALL)
+                .border_style(border_style),
+        )
+        .highlight_style(
+            Style::default()
+                .bg(Color::Rgb(48, 56, 68))
+                .add_modifier(Modifier::BOLD),
+        )
+        .highlight_symbol("▸ ")
+        .highlight_spacing(HighlightSpacing::Always);
+
+    let mut list_state = ListState::default();
+    if focused && !indices.is_empty() {
+        list_state.select(Some(cursor.min(indices.len() - 1)));
+    }
+    frame.render_stateful_widget(list, area, &mut list_state);
+}
+
+fn build_list_item<'a>(index: usize, pr: &'a PullRequest, username: &str) -> ListItem<'a> {
+    let ci_style = ci_style(pr.ci_status);
+    let row_style = if index.is_multiple_of(2) {
+        Style::default().fg(Color::White)
+    } else {
+        Style::default().fg(Color::Gray)
+    };
+
+    ListItem::new(vec![
+        Line::from(vec![
+            Span::styled(
+                format!("#{:<6}", pr.number),
+                Style::default().fg(Color::Blue),
+            ),
+            Span::styled(
+                format!("{} ", pr.author),
+                row_style.add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(truncate(&pr.title, 48), row_style),
+        ]),
+        Line::from(vec![
+            Span::styled("repo: ", Style::default().fg(Color::DarkGray)),
+            Span::styled(
+                truncate(&pr.repository, 22),
+                Style::default().fg(Color::White),
+            ),
+            Span::raw("  "),
+            Span::styled("ci: ", Style::default().fg(Color::DarkGray)),
+            Span::styled(
+                ci_label(pr.ci_status),
+                ci_style.add_modifier(Modifier::BOLD),
+            ),
+            if pr.draft {
+                Span::styled("  draft", Style::default().fg(Color::Magenta))
+            } else {
+                Span::raw("")
+            },
+            approval_badge(pr),
+            involved_badge(pr, username),
+            review_badge(pr, username),
+        ]),
+        Line::from(Span::styled(
+            pr.updates_since_last_ack(username),
+            Style::default().fg(Color::DarkGray),
+        )),
+        Line::raw(""),
+    ])
 }

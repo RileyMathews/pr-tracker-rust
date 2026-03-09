@@ -288,7 +288,7 @@ fn notify_sync_changes(summary: &SyncRunSummary, username: &str) -> anyhow::Resu
     #[cfg(target_os = "linux")]
     {
         for pr in &summary.new_prs {
-            if !pr.should_notify_on_changes(username.to_string()) {
+            if !pr.should_notify_on_changes(username) {
                 continue;
             }
 
@@ -305,7 +305,7 @@ fn notify_sync_changes(summary: &SyncRunSummary, username: &str) -> anyhow::Resu
         }
 
         for pr in &summary.updated_prs {
-            if !pr.should_notify_on_changes(username.to_string()) {
+            if !pr.should_notify_on_changes(username) {
                 continue;
             }
 

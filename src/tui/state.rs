@@ -19,8 +19,12 @@ impl SharedState {
             .enumerate()
             .filter_map(|(index, pr)| {
                 let include = match view_mode {
-                    super::navigation::ViewMode::Active => !pr.is_acknowledged(),
-                    super::navigation::ViewMode::Acknowledged => pr.is_acknowledged(),
+                    super::navigation::ViewMode::Active => {
+                        !pr.is_acknowledged_for_user(&self.username)
+                    }
+                    super::navigation::ViewMode::Acknowledged => {
+                        pr.is_acknowledged_for_user(&self.username)
+                    }
                 };
 
                 if include {

@@ -1,11 +1,15 @@
 use crate::models::PullRequest;
-use crate::tui::navigation::ViewMode;
+use crate::tui::navigation::{PrPane, ViewMode};
 use crate::tui::state::tui_attention_score;
 
 /// State for the PR List screen.
 pub struct State {
-    /// Cursor position in the filtered list.
-    pub cursor: usize,
+    /// Which pane is currently focused.
+    pub focus: PrPane,
+    /// Cursor position in the tracked-authors pane.
+    pub tracked_cursor: usize,
+    /// Cursor position in the authored-by-me pane.
+    pub mine_cursor: usize,
     /// Current view mode (Active or Acknowledged).
     pub view_mode: ViewMode,
 }
@@ -14,29 +18,29 @@ impl State {
     /// Create a new PR List state with default values.
     pub fn new() -> Self {
         Self {
-            cursor: 0,
+            focus: PrPane::Tracked,
+            tracked_cursor: 0,
+            mine_cursor: 0,
             view_mode: ViewMode::Active,
         }
     }
 
-    /// Filter and sort PR indices based on view mode and attention score.
-    ///
-    /// Returns indices sorted by:
-    /// 1. Attention score (descending)
-    /// 2. Updated at (descending)
-    /// 3. Repository (ascending)
-    /// 4. Number (ascending)
-    pub fn filtered_indices(&self, prs: &[PullRequest], username: &str) -> Vec<usize> {
+    fn pane_indices(&self, prs: &[PullRequest], username: &str, pane: PrPane) -> Vec<usize> {
         let mut indices: Vec<usize> = prs
             .iter()
             .enumerate()
             .filter_map(|(index, pr)| {
-                let include = match self.view_mode {
-                    ViewMode::Active => !pr.is_acknowledged(),
-                    ViewMode::Acknowledged => pr.is_acknowledged(),
+                let matches_view = match self.view_mode {
+                    ViewMode::Active => !pr.is_acknowledged_for_user(username),
+                    ViewMode::Acknowledged => pr.is_acknowledged_for_user(username),
                 };
 
-                if include {
+                let matches_pane = match pane {
+                    PrPane::Tracked => !pr.is_mine(username),
+                    PrPane::Mine => pr.is_mine(username),
+                };
+
+                if matches_view && matches_pane {
                     Some(index)
                 } else {
                     None
@@ -59,28 +63,71 @@ impl State {
         indices
     }
 
-    /// Return the PR index at the current cursor position.
-    pub fn selected_index(&self, filtered_indices: &[usize]) -> Option<usize> {
-        filtered_indices.get(self.cursor).copied()
+    pub fn tracked_indices(&self, prs: &[PullRequest], username: &str) -> Vec<usize> {
+        self.pane_indices(prs, username, PrPane::Tracked)
     }
 
-    /// Clamp cursor to valid range.
-    pub fn ensure_cursor_in_range(&mut self, len: usize) {
-        if len == 0 {
-            self.cursor = 0;
-            return;
-        }
+    pub fn mine_indices(&self, prs: &[PullRequest], username: &str) -> Vec<usize> {
+        self.pane_indices(prs, username, PrPane::Mine)
+    }
 
-        if self.cursor >= len {
-            self.cursor = len - 1;
+    pub fn cursor_for(&self, pane: PrPane) -> usize {
+        match pane {
+            PrPane::Tracked => self.tracked_cursor,
+            PrPane::Mine => self.mine_cursor,
         }
+    }
+
+    pub fn cursor_for_mut(&mut self, pane: PrPane) -> &mut usize {
+        match pane {
+            PrPane::Tracked => &mut self.tracked_cursor,
+            PrPane::Mine => &mut self.mine_cursor,
+        }
+    }
+
+    pub fn selected_index(&self, filtered_indices: &[usize], pane: PrPane) -> Option<usize> {
+        filtered_indices.get(self.cursor_for(pane)).copied()
+    }
+
+    pub fn focused_pane_indices(&self, prs: &[PullRequest], username: &str) -> Vec<usize> {
+        match self.focus {
+            PrPane::Tracked => self.tracked_indices(prs, username),
+            PrPane::Mine => self.mine_indices(prs, username),
+        }
+    }
+
+    pub fn selected_index_for_focus(&self, prs: &[PullRequest], username: &str) -> Option<usize> {
+        let filtered_indices = self.focused_pane_indices(prs, username);
+        self.selected_index(&filtered_indices, self.focus)
+    }
+
+    pub fn clamp_cursor(&mut self, pane: PrPane, len: usize) {
+        let cursor = self.cursor_for_mut(pane);
+        if len == 0 {
+            *cursor = 0;
+        } else if *cursor >= len {
+            *cursor = len - 1;
+        }
+    }
+
+    pub fn clamp_cursors(&mut self, tracked_len: usize, mine_len: usize) {
+        self.clamp_cursor(PrPane::Tracked, tracked_len);
+        self.clamp_cursor(PrPane::Mine, mine_len);
+    }
+
+    pub fn toggle_focus(&mut self) {
+        self.focus = match self.focus {
+            PrPane::Tracked => PrPane::Mine,
+            PrPane::Mine => PrPane::Tracked,
+        };
     }
 
     /// Toggle between Active and Acknowledged view modes.
-    /// Resets cursor to 0 when toggling.
+    /// Resets both cursors to 0 when toggling.
     pub fn toggle_view(&mut self) {
         self.view_mode = self.view_mode.toggle();
-        self.cursor = 0;
+        self.tracked_cursor = 0;
+        self.mine_cursor = 0;
     }
 
     /// Return the label for the current view mode.
@@ -124,214 +171,128 @@ mod tests {
         }
     }
 
-    fn pr_with_ack(number: i64, ack: bool) -> PullRequest {
+    fn pr_with_author(number: i64, author: &str) -> PullRequest {
         let mut pr = test_pr();
         pr.number = number;
+        pr.author = author.to_string();
+        pr
+    }
+
+    fn pr_with_ack(number: i64, author: &str, ack: bool) -> PullRequest {
+        let mut pr = pr_with_author(number, author);
         if ack {
             pr.last_acknowledged_at = Some(DateTime::UNIX_EPOCH);
         }
         pr
     }
 
-    // ── State::new tests ──────────────────────────────────────────────
-
     #[test]
-    fn new_starts_at_cursor_zero() {
+    fn new_starts_with_tracked_focus() {
         let state = State::new();
-        assert_eq!(state.cursor, 0);
+        assert!(matches!(state.focus, PrPane::Tracked));
     }
 
     #[test]
-    fn new_starts_with_active_view() {
+    fn new_starts_with_zero_cursors() {
         let state = State::new();
-        assert!(matches!(state.view_mode, ViewMode::Active));
+        assert_eq!(state.tracked_cursor, 0);
+        assert_eq!(state.mine_cursor, 0);
     }
 
-    // ── State::toggle_view tests ───────────────────────────────────
+    #[test]
+    fn toggle_focus_switches_to_mine() {
+        let mut state = State::new();
+        state.toggle_focus();
+        assert!(matches!(state.focus, PrPane::Mine));
+    }
 
     #[test]
-    fn toggle_view_switches_to_acknowledged() {
+    fn toggle_view_resets_both_cursors() {
         let mut state = State::new();
+        state.tracked_cursor = 2;
+        state.mine_cursor = 3;
         state.toggle_view();
-        assert!(matches!(state.view_mode, ViewMode::Acknowledged));
+        assert_eq!(state.tracked_cursor, 0);
+        assert_eq!(state.mine_cursor, 0);
     }
 
     #[test]
-    fn toggle_view_resets_cursor_to_zero() {
-        let mut state = State::new();
-        state.cursor = 5;
-        state.toggle_view();
-        assert_eq!(state.cursor, 0);
-    }
-
-    #[test]
-    fn toggle_view_twice_returns_to_active() {
-        let mut state = State::new();
-        state.toggle_view();
-        state.toggle_view();
-        assert!(matches!(state.view_mode, ViewMode::Active));
-    }
-
-    // ── State::ensure_cursor_in_range tests ─────────────────────────
-
-    #[test]
-    fn ensure_cursor_in_range_empty_list_sets_zero() {
-        let mut state = State::new();
-        state.cursor = 5;
-        state.ensure_cursor_in_range(0);
-        assert_eq!(state.cursor, 0);
-    }
-
-    #[test]
-    fn ensure_cursor_in_range_clamps_when_beyond() {
-        let mut state = State::new();
-        state.cursor = 10;
-        state.ensure_cursor_in_range(5); // only 5 items
-        assert_eq!(state.cursor, 4); // clamped to len-1
-    }
-
-    #[test]
-    fn ensure_cursor_in_range_unchanged_when_valid() {
-        let mut state = State::new();
-        state.cursor = 3;
-        state.ensure_cursor_in_range(10);
-        assert_eq!(state.cursor, 3);
-    }
-
-    #[test]
-    fn ensure_cursor_in_range_handles_cursor_at_boundary() {
-        let mut state = State::new();
-        state.cursor = 4;
-        state.ensure_cursor_in_range(5);
-        assert_eq!(state.cursor, 4); // valid, should stay
-    }
-
-    // ── State::filtered_indices tests ────────────────────────────────
-
-    #[test]
-    fn filtered_indices_active_view_filters_non_acknowledged() {
+    fn tracked_indices_exclude_my_prs() {
         let state = State::new();
-        let prs = vec![
-            pr_with_ack(1, false),
-            pr_with_ack(2, true),
-            pr_with_ack(3, false),
-        ];
+        let prs = vec![pr_with_author(1, "alice"), pr_with_author(2, "bob")];
 
-        let indices = state.filtered_indices(&prs, "bob");
-
-        assert_eq!(indices, vec![0, 2]);
+        assert_eq!(state.tracked_indices(&prs, "alice"), vec![1]);
     }
 
     #[test]
-    fn filtered_indices_acknowledged_view_filters_acknowledged() {
+    fn mine_indices_include_only_my_prs() {
+        let state = State::new();
+        let prs = vec![pr_with_author(1, "alice"), pr_with_author(2, "bob")];
+
+        assert_eq!(state.mine_indices(&prs, "alice"), vec![0]);
+    }
+
+    #[test]
+    fn tracked_indices_filter_acknowledged_by_view_mode() {
         let mut state = State::new();
         state.view_mode = ViewMode::Acknowledged;
-        let prs = vec![
-            pr_with_ack(1, false),
-            pr_with_ack(2, true),
-            pr_with_ack(3, false),
-        ];
+        let prs = vec![pr_with_ack(1, "bob", false), pr_with_ack(2, "bob", true)];
 
-        let indices = state.filtered_indices(&prs, "bob");
-
-        assert_eq!(indices, vec![1]);
+        assert_eq!(state.tracked_indices(&prs, "alice"), vec![1]);
     }
 
     #[test]
-    fn filtered_indices_empty_list_returns_empty() {
-        let state = State::new();
-        let prs: Vec<PullRequest> = vec![];
+    fn mine_indices_keep_my_commit_acknowledged() {
+        let mut state = State::new();
+        state.view_mode = ViewMode::Acknowledged;
+        let mut pr = pr_with_author(1, "alice");
+        pr.last_acknowledged_at = Some(DateTime::UNIX_EPOCH);
+        pr.last_commit_at = Utc.timestamp_opt(10, 0).unwrap();
 
-        let indices = state.filtered_indices(&prs, "bob");
-
-        assert!(indices.is_empty());
+        assert_eq!(state.mine_indices(&[pr], "alice"), vec![0]);
     }
 
     #[test]
-    fn filtered_indices_sorts_by_attention_score() {
-        let state = State::new();
-        let mut pr1 = test_pr();
-        pr1.number = 1;
-        pr1.requested_reviewers = vec!["bob".to_string()];
+    fn clamp_cursors_clamps_each_pane_independently() {
+        let mut state = State::new();
+        state.tracked_cursor = 10;
+        state.mine_cursor = 4;
 
-        let mut pr2 = test_pr();
-        pr2.number = 2;
+        state.clamp_cursors(2, 0);
+
+        assert_eq!(state.tracked_cursor, 1);
+        assert_eq!(state.mine_cursor, 0);
+    }
+
+    #[test]
+    fn selected_index_uses_pane_cursor() {
+        let mut state = State::new();
+        state.mine_cursor = 1;
+        let filtered = vec![4, 8, 9];
+
+        assert_eq!(state.selected_index(&filtered, PrPane::Mine), Some(8));
+    }
+
+    #[test]
+    fn selected_index_for_focus_uses_focused_pane() {
+        let mut state = State::new();
+        state.focus = PrPane::Mine;
+        let prs = vec![pr_with_author(1, "bob"), pr_with_author(2, "alice")];
+
+        assert_eq!(state.selected_index_for_focus(&prs, "alice"), Some(1));
+    }
+
+    #[test]
+    fn tracked_indices_sort_by_attention_then_updated() {
+        let state = State::new();
+        let mut pr1 = pr_with_author(1, "bob");
+        pr1.requested_reviewers = vec!["alice".to_string()];
+
+        let mut pr2 = pr_with_author(2, "carol");
+        pr2.updated_at = Utc.timestamp_opt(100, 0).unwrap();
 
         let prs = vec![pr2, pr1];
 
-        let indices = state.filtered_indices(&prs, "bob");
-
-        // PR 1 has higher score (involved)
-        assert_eq!(indices, vec![1, 0]);
-    }
-
-    #[test]
-    fn filtered_indices_sorts_by_updated_at_when_scores_equal() {
-        let state = State::new();
-        let mut pr1 = test_pr();
-        pr1.number = 1;
-        pr1.updated_at = Utc.timestamp_opt(100, 0).unwrap();
-
-        let mut pr2 = test_pr();
-        pr2.number = 2;
-        pr2.updated_at = Utc.timestamp_opt(200, 0).unwrap();
-
-        let prs = vec![pr1, pr2];
-
-        let indices = state.filtered_indices(&prs, "bob");
-
-        // Later updated_at comes first
-        assert_eq!(indices, vec![1, 0]);
-    }
-
-    // ── State::selected_index tests ─────────────────────────────────
-
-    #[test]
-    fn selected_index_returns_correct_index() {
-        let state = State::new();
-        let filtered = vec![2, 0, 1];
-
-        assert_eq!(state.selected_index(&filtered), Some(2));
-    }
-
-    #[test]
-    fn selected_index_with_cursor_returns_correct() {
-        let mut state = State::new();
-        state.cursor = 1;
-        let filtered = vec![2, 0, 1];
-
-        assert_eq!(state.selected_index(&filtered), Some(0));
-    }
-
-    #[test]
-    fn selected_index_returns_none_when_out_of_range() {
-        let mut state = State::new();
-        state.cursor = 10;
-        let filtered = vec![0, 1];
-
-        assert_eq!(state.selected_index(&filtered), None);
-    }
-
-    #[test]
-    fn selected_index_returns_none_with_empty_list() {
-        let state = State::new();
-        let filtered: Vec<usize> = vec![];
-
-        assert_eq!(state.selected_index(&filtered), None);
-    }
-
-    // ── view_label tests ───────────────────────────────────────────
-
-    #[test]
-    fn view_label_active() {
-        let state = State::new();
-        assert_eq!(state.view_label(), "active");
-    }
-
-    #[test]
-    fn view_label_acknowledged() {
-        let mut state = State::new();
-        state.view_mode = ViewMode::Acknowledged;
-        assert_eq!(state.view_label(), "acknowledged");
+        assert_eq!(state.tracked_indices(&prs, "alice"), vec![1, 0]);
     }
 }

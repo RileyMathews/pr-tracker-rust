@@ -30,6 +30,13 @@ impl ViewMode {
     }
 }
 
+/// Which pane is focused on the PR list screen.
+#[derive(Clone, Copy, PartialEq)]
+pub enum PrPane {
+    Tracked,
+    Mine,
+}
+
 /// Which pane is focused on the Authors screen.
 #[derive(Clone, Copy, PartialEq)]
 pub enum AuthorsPane {

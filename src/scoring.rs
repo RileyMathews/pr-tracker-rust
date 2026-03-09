@@ -1,4 +1,4 @@
-use crate::models::{ApprovalStatus, CiStatus, PullRequest};
+use crate::models::{ApprovalStatus, CiStatus, PrPerspective, PullRequest};
 
 /// Computes an importance score for a PR relative to the given user.
 ///
@@ -6,63 +6,64 @@ use crate::models::{ApprovalStatus, CiStatus, PullRequest};
 /// The score uses additive points with the ownership axis (~1000 points)
 /// dominating, and CI/draft/approval as secondary adjusters (~50-200 points).
 pub fn importance_score(pr: &PullRequest, username: &str) -> i64 {
+    match pr.perspective(username) {
+        PrPerspective::MyPr => importance_score_for_my_pr(pr),
+        PrPerspective::TrackedPr => importance_score_for_tracked_pr(pr, username),
+    }
+}
+
+fn importance_score_for_my_pr(pr: &PullRequest) -> i64 {
+    let mut score: i64 = 1000;
+
+    if pr.draft {
+        score -= 100;
+    }
+
+    match pr.ci_status {
+        CiStatus::Failure => score += 100,
+        CiStatus::Success => score += 50,
+        CiStatus::Pending => {}
+    }
+
+    match pr.approval_status {
+        ApprovalStatus::ChangesRequested => score += 100,
+        ApprovalStatus::Approved => score += 50,
+        ApprovalStatus::None => {}
+    }
+
+    score
+}
+
+fn importance_score_for_tracked_pr(pr: &PullRequest, username: &str) -> i64 {
     let mut score: i64 = 0;
+    let is_requested_reviewer = !username.is_empty()
+        && pr
+            .requested_reviewers
+            .iter()
+            .any(|reviewer| reviewer.eq_ignore_ascii_case(username));
 
-    let is_author = !username.is_empty() && pr.author.eq_ignore_ascii_case(username);
-    let is_involved = pr.user_is_involved(username);
-    let is_requested_reviewer = is_involved && !is_author;
-
-    // Ownership axis (primary separator)
-    if is_author {
-        score += 1000;
-    } else if is_requested_reviewer {
+    if is_requested_reviewer {
         score += 500;
     }
 
-    // Draft penalty
+    if pr.user_has_reviewed {
+        score += 100;
+    }
+
     if pr.draft {
-        if is_author {
-            score -= 100;
-        } else {
-            score -= 200;
-        }
+        score -= 200;
     }
 
-    // CI status (context-dependent on authorship)
     match pr.ci_status {
-        CiStatus::Failure => {
-            if is_author {
-                score += 100; // Urgent — you need to fix this
-            } else {
-                score -= 50; // Not actionable by reviewer
-            }
-        }
-        CiStatus::Success => {
-            score += 50; // Ready for review/merge (same for author and non-author)
-        }
-        CiStatus::Pending => {
-            // No adjustment — waiting
-        }
+        CiStatus::Failure => score -= 50,
+        CiStatus::Success => score += 50,
+        CiStatus::Pending => {}
     }
 
-    // Approval status (context-dependent on authorship)
     match pr.approval_status {
-        ApprovalStatus::ChangesRequested => {
-            if is_author {
-                score += 100; // Urgent — address feedback
-            }
-            // Non-author: author needs to act, not you — no adjustment
-        }
-        ApprovalStatus::Approved => {
-            if is_author {
-                score += 50; // Ready to merge
-            } else {
-                score -= 100; // Someone already handled it
-            }
-        }
-        ApprovalStatus::None => {
-            // No adjustment
-        }
+        ApprovalStatus::ChangesRequested => {}
+        ApprovalStatus::Approved => score -= 100,
+        ApprovalStatus::None => {}
     }
 
     score
@@ -414,6 +415,18 @@ mod tests {
 
         // reviewer: 500, CI success: +50 = 550
         assert_eq!(importance_score(&pr, "alice"), 550);
+    }
+
+    #[test]
+    fn previously_reviewed_tracked_pr_scores_above_unrelated() {
+        let mut reviewed = test_pr();
+        reviewed.author = "bob".to_string();
+        reviewed.user_has_reviewed = true;
+
+        let mut unrelated = test_pr();
+        unrelated.author = "bob".to_string();
+
+        assert!(importance_score(&reviewed, "alice") > importance_score(&unrelated, "alice"));
     }
 
     // ── Edge cases ──────────────────────────────────────────────────

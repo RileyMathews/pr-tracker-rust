@@ -437,58 +437,6 @@ impl DatabaseRepository {
     }
 }
 
-#[derive(Debug, FromRow)]
-struct PullRequestRow {
-    number: i64,
-    title: String,
-    repository: String,
-    author: String,
-    head_sha: String,
-    draft: bool,
-    created_at_unix: i64,
-    updated_at_unix: i64,
-    ci_status: i64,
-    last_comment_unix: i64,
-    last_commit_unix: i64,
-    last_ci_status_update_unix: i64,
-    last_acknowledged_unix: Option<i64>,
-    requested_reviewers: String,
-    approval_status: i64,
-    last_review_status_update_unix: i64,
-    user_has_reviewed: bool,
-}
-
-impl PullRequestRow {
-    fn into_model(self) -> anyhow::Result<PullRequest> {
-        let requested_reviewers: Vec<String> = serde_json::from_str(&self.requested_reviewers)
-            .map_err(|err| anyhow::anyhow!("unmarshal requested_reviewers: {err}"))?;
-
-        Ok(PullRequest {
-            number: self.number,
-            title: self.title,
-            repository: self.repository,
-            author: self.author,
-            head_sha: self.head_sha,
-            draft: self.draft,
-            created_at: unix_to_datetime(self.created_at_unix)?,
-            updated_at: unix_to_datetime(self.updated_at_unix)?,
-            ci_status: CiStatus::from_i64(self.ci_status),
-            last_comment_at: unix_to_datetime(self.last_comment_unix)?,
-            last_commit_at: unix_to_datetime(self.last_commit_unix)?,
-            last_ci_status_update_at: unix_to_datetime(self.last_ci_status_update_unix)?,
-            approval_status: ApprovalStatus::from_i64(self.approval_status),
-            last_review_status_update_at: unix_to_datetime(self.last_review_status_update_unix)?,
-            last_acknowledged_at: self
-                .last_acknowledged_unix
-                .map(unix_to_datetime)
-                .transpose()?,
-            requested_reviewers,
-            user_has_reviewed: self.user_has_reviewed,
-            comments: vec![],
-        })
-    }
-}
-
 fn unix_to_datetime(seconds: i64) -> anyhow::Result<DateTime<Utc>> {
     DateTime::from_timestamp(seconds, 0)
         .ok_or_else(|| anyhow::anyhow!("invalid unix timestamp: {seconds}"))

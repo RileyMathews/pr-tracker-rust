@@ -1,7 +1,6 @@
 use crossterm::event::KeyCode;
 
 use crate::db::DatabaseRepository;
-use crate::models::PullRequest;
 use crate::tui::navigation::Screen;
 use crate::tui::pr_list::State;
 use crate::tui::state::SharedState;
@@ -32,28 +31,40 @@ pub async fn handle_event(
     match key_code {
         KeyCode::Char('q') => Ok(EventResult::Quit),
 
+        KeyCode::Tab => {
+            state.toggle_focus();
+            let tracked_len = state.tracked_indices(&shared.prs, &shared.username).len();
+            let mine_len = state.mine_indices(&shared.prs, &shared.username).len();
+            state.clamp_cursors(tracked_len, mine_len);
+            Ok(EventResult::Continue)
+        }
+
         KeyCode::Up | KeyCode::Char('k') => {
-            let filtered_indices = state.filtered_indices(&shared.prs, &shared.username);
-            state.ensure_cursor_in_range(filtered_indices.len());
-            if state.cursor > 0 {
-                state.cursor -= 1;
+            let filtered_len = state
+                .focused_pane_indices(&shared.prs, &shared.username)
+                .len();
+            state.clamp_cursor(state.focus, filtered_len);
+            let cursor = state.cursor_for_mut(state.focus);
+            if *cursor > 0 {
+                *cursor -= 1;
             }
             Ok(EventResult::Continue)
         }
 
         KeyCode::Down | KeyCode::Char('j') => {
-            let filtered_indices = state.filtered_indices(&shared.prs, &shared.username);
-            state.ensure_cursor_in_range(filtered_indices.len());
-            if state.cursor + 1 < filtered_indices.len() {
-                state.cursor += 1;
+            let filtered_len = state
+                .focused_pane_indices(&shared.prs, &shared.username)
+                .len();
+            state.clamp_cursor(state.focus, filtered_len);
+            let cursor = state.cursor_for_mut(state.focus);
+            if *cursor + 1 < filtered_len {
+                *cursor += 1;
             }
             Ok(EventResult::Continue)
         }
 
         KeyCode::Enter | KeyCode::Char(' ') => {
-            let filtered_indices = state.filtered_indices(&shared.prs, &shared.username);
-            state.ensure_cursor_in_range(filtered_indices.len());
-            if let Some(pr_index) = state.selected_index(&filtered_indices) {
+            if let Some(pr_index) = state.selected_index_for_focus(&shared.prs, &shared.username) {
                 let pr = &shared.prs[pr_index];
                 let _ = open::that(pr.url());
             }
@@ -61,25 +72,24 @@ pub async fn handle_event(
         }
 
         KeyCode::Char('a') => {
-            let filtered_indices = state.filtered_indices(&shared.prs, &shared.username);
-            state.ensure_cursor_in_range(filtered_indices.len());
-            if let Some(pr_index) = state.selected_index(&filtered_indices) {
+            if let Some(pr_index) = state.selected_index_for_focus(&shared.prs, &shared.username) {
                 let mut pr = shared.prs[pr_index].clone();
                 pr.last_acknowledged_at = Some(Utc::now());
                 repo.save_pr(&pr).await?;
                 shared.prs[pr_index] = pr;
 
-                let updated_filtered_indices =
-                    state.filtered_indices(&shared.prs, &shared.username);
-                state.ensure_cursor_in_range(updated_filtered_indices.len());
+                let tracked_len = state.tracked_indices(&shared.prs, &shared.username).len();
+                let mine_len = state.mine_indices(&shared.prs, &shared.username).len();
+                state.clamp_cursors(tracked_len, mine_len);
             }
             Ok(EventResult::Continue)
         }
 
         KeyCode::Char('v') => {
             state.toggle_view();
-            let filtered_indices = state.filtered_indices(&shared.prs, &shared.username);
-            state.ensure_cursor_in_range(filtered_indices.len());
+            let tracked_len = state.tracked_indices(&shared.prs, &shared.username).len();
+            let mine_len = state.mine_indices(&shared.prs, &shared.username).len();
+            state.clamp_cursors(tracked_len, mine_len);
             Ok(EventResult::Continue)
         }
 
@@ -102,13 +112,4 @@ pub async fn handle_event(
 
         _ => Ok(EventResult::Continue),
     }
-}
-
-/// Helper function to get the currently selected PR.
-/// Used when acknowledging or opening PRs.
-pub fn get_selected_pr<'a>(state: &State, shared: &'a SharedState) -> Option<&'a PullRequest> {
-    let filtered_indices = state.filtered_indices(&shared.prs, &shared.username);
-    state
-        .selected_index(&filtered_indices)
-        .and_then(|index| shared.prs.get(index))
 }

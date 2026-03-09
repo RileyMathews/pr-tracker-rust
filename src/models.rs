@@ -154,12 +154,25 @@ impl PullRequest {
 
     pub fn meaningful_changes(&self, current_user: &str) -> Vec<ChangeKind> {
         let perspective = self.perspective(current_user);
+        let last_ack = self.last_acknowledged_at;
 
         self.all_changes()
             .into_iter()
-            .filter(|change| match perspective {
-                PrPerspective::MyPr => !matches!(change, ChangeKind::NewCommit),
-                PrPerspective::TrackedPr => true,
+            .filter(|change| match change {
+                ChangeKind::NewPullRequest => true,
+                ChangeKind::NewCommit => match perspective {
+                    PrPerspective::MyPr => false,
+                    PrPerspective::TrackedPr => {
+                        self.commit_changes_are_meaningful_for_user(current_user)
+                    }
+                },
+                ChangeKind::NewCistatus => self.ci_change_is_meaningful(),
+                ChangeKind::NewComment => last_ack.is_none_or(|last_ack| {
+                    self.has_external_comment_activity_since(last_ack, current_user)
+                }),
+                ChangeKind::NewReviewStatus => last_ack.is_none_or(|last_ack| {
+                    self.has_external_review_activity_since(last_ack, current_user)
+                }),
             })
             .collect()
     }
@@ -235,12 +248,46 @@ impl PullRequest {
             .any(|reviewer| reviewer.eq_ignore_ascii_case(current_user))
     }
 
+    fn commit_changes_are_meaningful_for_user(&self, current_user: &str) -> bool {
+        self.user_is_involved(current_user) || self.user_has_reviewed
+    }
+
+    fn ci_change_is_meaningful(&self) -> bool {
+        !matches!(self.ci_status, CiStatus::Pending)
+    }
+
+    fn has_external_comment_activity_since(
+        &self,
+        last_ack: DateTime<Utc>,
+        current_user: &str,
+    ) -> bool {
+        self.comments.iter().any(|comment| {
+            comment.updated_at > last_ack && !author_matches_user(&comment.author, current_user)
+        })
+    }
+
+    fn has_external_review_activity_since(
+        &self,
+        last_ack: DateTime<Utc>,
+        current_user: &str,
+    ) -> bool {
+        self.comments.iter().any(|comment| {
+            comment.is_review_comment
+                && comment.updated_at > last_ack
+                && !author_matches_user(&comment.author, current_user)
+        })
+    }
+
     pub fn url(&self) -> String {
         format!(
             "https://github.com/{}/pull/{}",
             self.repository, self.number
         )
     }
+}
+
+fn author_matches_user(author: &str, current_user: &str) -> bool {
+    !current_user.is_empty() && author.eq_ignore_ascii_case(current_user)
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -322,6 +369,20 @@ mod tests {
         pr
     }
 
+    fn test_comment(author: &str, updated_at: DateTime<Utc>, is_review_comment: bool) -> PrComment {
+        PrComment {
+            id: format!("{author}-{}", updated_at.timestamp()),
+            repository: "owner/repo".to_string(),
+            pr_number: 42,
+            author: author.to_string(),
+            body: String::new(),
+            created_at: updated_at,
+            updated_at,
+            is_review_comment,
+            review_state: is_review_comment.then(|| "COMMENTED".to_string()),
+        }
+    }
+
     #[test]
     fn should_notify_returns_true() {
         assert!(build_pull_request(&[]).should_notify_on_changes("foo"));
@@ -350,9 +411,17 @@ mod tests {
 
     #[test]
     fn notify_returns_true_for_commit_on_other_prs() {
-        let pr = build_pull_request(&[TestPrEvent::Ack, TestPrEvent::Commit]);
+        let mut pr = build_pull_request(&[TestPrEvent::Ack, TestPrEvent::Commit]);
+        pr.requested_reviewers = vec![not_author()];
 
         assert!(pr.should_notify_on_changes(&not_author()));
+    }
+
+    #[test]
+    fn notify_returns_false_for_commit_on_unrelated_tracked_pr() {
+        let pr = build_pull_request(&[TestPrEvent::Ack, TestPrEvent::Commit]);
+
+        assert!(!pr.should_notify_on_changes("reviewer"));
     }
 
     #[test]
@@ -364,10 +433,29 @@ mod tests {
 
     #[test]
     fn meaningful_changes_keeps_new_commit_for_tracked_pr() {
-        let pr = build_pull_request(&[TestPrEvent::Ack, TestPrEvent::Commit]);
+        let mut pr = build_pull_request(&[TestPrEvent::Ack, TestPrEvent::Commit]);
+        pr.requested_reviewers = vec![not_author()];
 
         assert_eq!(
             pr.meaningful_changes(&not_author()),
+            vec![ChangeKind::NewCommit]
+        );
+    }
+
+    #[test]
+    fn meaningful_changes_ignores_new_commit_for_unrelated_tracked_pr() {
+        let pr = build_pull_request(&[TestPrEvent::Ack, TestPrEvent::Commit]);
+
+        assert!(pr.meaningful_changes("reviewer").is_empty());
+    }
+
+    #[test]
+    fn meaningful_changes_keeps_new_commit_for_previously_reviewed_tracked_pr() {
+        let mut pr = build_pull_request(&[TestPrEvent::Ack, TestPrEvent::Commit]);
+        pr.user_has_reviewed = true;
+
+        assert_eq!(
+            pr.meaningful_changes("reviewer"),
             vec![ChangeKind::NewCommit]
         );
     }
@@ -381,16 +469,90 @@ mod tests {
 
     #[test]
     fn is_acknowledged_for_user_resets_for_my_new_comment() {
-        let pr = build_pull_request(&[TestPrEvent::Ack, TestPrEvent::Comment]);
+        let ack = timestamp(2);
+        let comment_at = timestamp(3);
+        let mut pr = build_pull_request(&[]);
+        pr.last_acknowledged_at = Some(ack);
+        pr.last_comment_at = comment_at;
+        pr.updated_at = comment_at;
+        pr.comments = vec![test_comment(&not_author(), comment_at, false)];
 
         assert!(!pr.is_acknowledged_for_user(&author()));
     }
 
     #[test]
+    fn is_acknowledged_for_user_stays_true_for_my_own_comment() {
+        let ack = timestamp(2);
+        let comment_at = timestamp(3);
+        let mut pr = build_pull_request(&[]);
+        pr.last_acknowledged_at = Some(ack);
+        pr.last_comment_at = comment_at;
+        pr.updated_at = comment_at;
+        pr.comments = vec![test_comment(&author(), comment_at, false)];
+
+        assert!(pr.is_acknowledged_for_user(&author()));
+    }
+
+    #[test]
+    fn is_acknowledged_for_user_resets_for_other_users_comment() {
+        let ack = timestamp(2);
+        let comment_at = timestamp(3);
+        let mut pr = build_pull_request(&[]);
+        pr.last_acknowledged_at = Some(ack);
+        pr.last_comment_at = comment_at;
+        pr.updated_at = comment_at;
+        pr.comments = vec![test_comment(&not_author(), comment_at, false)];
+
+        assert!(!pr.is_acknowledged_for_user(&author()));
+    }
+
+    #[test]
+    fn is_acknowledged_for_user_stays_true_for_my_own_review() {
+        let ack = timestamp(2);
+        let review_at = timestamp(3);
+        let mut pr = build_pull_request(&[]);
+        pr.last_acknowledged_at = Some(ack);
+        pr.last_comment_at = review_at;
+        pr.last_review_status_update_at = review_at;
+        pr.updated_at = review_at;
+        pr.comments = vec![test_comment(&author(), review_at, true)];
+
+        assert!(pr.is_acknowledged_for_user(&author()));
+    }
+
+    #[test]
     fn is_acknowledged_for_user_resets_for_tracked_pr_new_commit() {
-        let pr = build_pull_request(&[TestPrEvent::Ack, TestPrEvent::Commit]);
+        let mut pr = build_pull_request(&[TestPrEvent::Ack, TestPrEvent::Commit]);
+        pr.requested_reviewers = vec![not_author()];
 
         assert!(!pr.is_acknowledged_for_user(&not_author()));
+    }
+
+    #[test]
+    fn is_acknowledged_for_user_stays_true_for_tracked_pr_new_commit_when_unrelated() {
+        let pr = build_pull_request(&[TestPrEvent::Ack, TestPrEvent::Commit]);
+
+        assert!(pr.is_acknowledged_for_user("reviewer"));
+    }
+
+    #[test]
+    fn is_acknowledged_for_user_stays_true_for_pending_ci_change() {
+        let mut pr = build_pull_request(&[TestPrEvent::Ack, TestPrEvent::CiStatus]);
+        pr.ci_status = CiStatus::Pending;
+
+        assert!(pr.is_acknowledged_for_user(&not_author()));
+        assert!(!pr.should_notify_on_changes(&not_author()));
+    }
+
+    #[test]
+    fn meaningful_changes_keeps_non_pending_ci_change() {
+        let mut pr = build_pull_request(&[TestPrEvent::Ack, TestPrEvent::CiStatus]);
+        pr.ci_status = CiStatus::Failure;
+
+        assert_eq!(
+            pr.meaningful_changes(&not_author()),
+            vec![ChangeKind::NewCistatus]
+        );
     }
 
     #[test]

@@ -186,10 +186,10 @@ fn map_comments_from_pr(repo_name: &str, pr: &graphql::PullRequestNode) -> Vec<P
             .map(|a| a.login.clone())
             .unwrap_or_else(|| "unknown".to_string());
 
-        let created_at = parse_github_timestamp(&comment.created_at)
-            .unwrap_or(DateTime::UNIX_EPOCH);
-        let updated_at = parse_github_timestamp(&comment.updated_at)
-            .unwrap_or(DateTime::UNIX_EPOCH);
+        let created_at =
+            parse_github_timestamp(&comment.created_at).unwrap_or(DateTime::UNIX_EPOCH);
+        let updated_at =
+            parse_github_timestamp(&comment.updated_at).unwrap_or(DateTime::UNIX_EPOCH);
 
         comments.push(PrComment {
             id: comment.id.clone(),
@@ -212,10 +212,8 @@ fn map_comments_from_pr(repo_name: &str, pr: &graphql::PullRequestNode) -> Vec<P
             .map(|a| a.login.clone())
             .unwrap_or_else(|| "unknown".to_string());
 
-        let created_at = parse_github_timestamp(&review.created_at)
-            .unwrap_or(DateTime::UNIX_EPOCH);
-        let updated_at = parse_github_timestamp(&review.updated_at)
-            .unwrap_or(DateTime::UNIX_EPOCH);
+        let created_at = parse_github_timestamp(&review.created_at).unwrap_or(DateTime::UNIX_EPOCH);
+        let updated_at = parse_github_timestamp(&review.updated_at).unwrap_or(DateTime::UNIX_EPOCH);
 
         comments.push(PrComment {
             id: review.id.clone(),
@@ -250,15 +248,20 @@ fn filter_new_prs(
     authors_to_track: &[String],
     known_pr_numbers: &HashSet<i64>,
 ) -> Vec<i64> {
+    let tracked_authors: HashSet<String> = authors_to_track
+        .iter()
+        .map(|author| author.to_ascii_lowercase())
+        .collect();
+
     prs.iter()
         .filter(|pr| {
             let author = pr
                 .author
                 .as_ref()
-                .map(|a| a.login.as_str())
+                .map(|a| a.login.to_ascii_lowercase())
                 .unwrap_or_default();
-            authors_to_track.iter().any(|tracked| tracked == author)
-                && !known_pr_numbers.contains(&pr.number)
+
+            tracked_authors.contains(&author) && !known_pr_numbers.contains(&pr.number)
         })
         .map(|pr| pr.number)
         .collect()
@@ -362,5 +365,15 @@ mod tests {
 
         let result = filter_new_prs(&prs, &authors, &known);
         assert_eq!(result, vec![1, 4]);
+    }
+
+    #[test]
+    fn filter_new_prs_matches_authors_case_insensitively() {
+        let prs = vec![discovery_pr(42, Some("Alice"))];
+        let authors = vec!["alice".to_string()];
+        let known = HashSet::new();
+
+        let result = filter_new_prs(&prs, &authors, &known);
+        assert_eq!(result, vec![42]);
     }
 }

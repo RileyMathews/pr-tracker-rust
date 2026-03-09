@@ -389,7 +389,11 @@ impl DatabaseRepository {
         .bind(&comment.body)
         .bind(comment.created_at.timestamp())
         .bind(comment.updated_at.timestamp())
-        .bind(if comment.is_review_comment { 1i64 } else { 0i64 })
+        .bind(if comment.is_review_comment {
+            1i64
+        } else {
+            0i64
+        })
         .bind(&comment.review_state)
         .execute(&self.pool)
         .await?;
@@ -424,13 +428,11 @@ impl DatabaseRepository {
         repository: &str,
         pr_number: i64,
     ) -> anyhow::Result<()> {
-        sqlx::query(
-            "DELETE FROM pr_comments WHERE repository = ?1 AND pr_number = ?2",
-        )
-        .bind(repository)
-        .bind(pr_number)
-        .execute(&self.pool)
-        .await?;
+        sqlx::query("DELETE FROM pr_comments WHERE repository = ?1 AND pr_number = ?2")
+            .bind(repository)
+            .bind(pr_number)
+            .execute(&self.pool)
+            .await?;
         Ok(())
     }
 }
@@ -530,7 +532,7 @@ struct CommentJson {
     body: String,
     created_at_unix: i64,
     updated_at_unix: i64,
-    is_review_comment: i64,  // stored as 0/1 in JSON
+    is_review_comment: i64, // stored as 0/1 in JSON
     review_state: Option<String>,
 }
 
@@ -610,7 +612,7 @@ impl PullRequestWithCommentsRow {
                 .transpose()?,
             requested_reviewers,
             user_has_reviewed: self.user_has_reviewed,
-            comments,  // NEW: populated from JSON
+            comments, // NEW: populated from JSON
         })
     }
 }

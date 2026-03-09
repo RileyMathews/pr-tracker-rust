@@ -41,6 +41,20 @@ fn compute_discovery_cutoff(
     }
 }
 
+fn effective_tracked_authors(tracked_authors: &[String], username: &str) -> Vec<String> {
+    let mut authors = tracked_authors.to_vec();
+
+    if !username.is_empty()
+        && !authors
+            .iter()
+            .any(|author| author.eq_ignore_ascii_case(username))
+    {
+        authors.push(username.to_string());
+    }
+
+    authors
+}
+
 #[derive(Debug, Default)]
 pub struct SyncRunSummary {
     pub synced_repositories: usize,
@@ -95,7 +109,8 @@ where
     F: FnMut(SyncProgress),
 {
     let repositories = repository.get_tracked_repositories().await?;
-    let tracked_authors = repository.get_tracked_authors().await?;
+    let tracked_authors =
+        effective_tracked_authors(&repository.get_tracked_authors().await?, username);
 
     let mut summary = SyncRunSummary::default();
     progress_callback(SyncProgress::FullSyncStarted {
@@ -289,5 +304,23 @@ mod tests {
     fn cutoff_is_none_when_both_none() {
         let result = compute_discovery_cutoff(None, None);
         assert_eq!(result, None);
+    }
+
+    #[test]
+    fn effective_tracked_authors_includes_current_user() {
+        let authors = vec!["alice".to_string()];
+
+        let result = effective_tracked_authors(&authors, "bob");
+
+        assert_eq!(result, vec!["alice".to_string(), "bob".to_string()]);
+    }
+
+    #[test]
+    fn effective_tracked_authors_avoids_case_insensitive_duplicates() {
+        let authors = vec!["Alice".to_string()];
+
+        let result = effective_tracked_authors(&authors, "alice");
+
+        assert_eq!(result, vec!["Alice".to_string()]);
     }
 }

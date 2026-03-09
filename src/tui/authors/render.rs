@@ -153,10 +153,10 @@ pub fn draw(
             ))
         } else {
             Line::from(vec![
-                Span::styled("  /", Style::default().fg(Color::Yellow)),
+                Span::styled("  /", Style::default().fg(Color::LightYellow)),
                 Span::raw(" "),
                 Span::styled(&state.search_query, Style::default().fg(Color::White)),
-                Span::styled("█", Style::default().fg(Color::Yellow)), // cursor
+                Span::styled("█", Style::default().fg(Color::LightYellow)), // cursor
             ])
         };
         let search_bar = Paragraph::new(search_text)

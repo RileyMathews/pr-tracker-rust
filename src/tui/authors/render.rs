@@ -30,7 +30,7 @@ pub fn draw(
         Span::styled(
             "PR Tracker",
             Style::default()
-                .fg(Color::Cyan)
+                .fg(Color::LightCyan)
                 .add_modifier(Modifier::BOLD),
         ),
         Span::raw("  |  "),
@@ -49,7 +49,7 @@ pub fn draw(
         frame.render_widget(loading, chunks[1]);
     } else if let Some(ref err) = state.error {
         let error = Paragraph::new(format!("Error fetching teams: {}", err))
-            .style(Style::default().fg(Color::Red))
+            .style(Style::default().fg(Color::LightRed))
             .block(Block::default().borders(Borders::ALL).title("Error"));
         frame.render_widget(error, chunks[1]);
     } else {
@@ -62,9 +62,9 @@ pub fn draw(
         // Left pane: Tracked
         let tracked_focused = state.focus == AuthorsPane::Tracked;
         let tracked_border_style = if tracked_focused {
-            Style::default().fg(Color::Cyan)
+            Style::default().fg(Color::LightCyan)
         } else {
-            Style::default().fg(Color::DarkGray)
+            Style::default().fg(Color::LightGray)
         };
         let tracked_filtered = state.filtered_list(&state.tracked);
         let tracked_items: Vec<ListItem<'_>> = tracked_filtered
@@ -90,7 +90,7 @@ pub fn draw(
             )
             .highlight_style(
                 Style::default()
-                    .bg(Color::Rgb(48, 56, 68))
+                    .bg(Color::Rgb(80, 90, 110))
                     .add_modifier(Modifier::BOLD),
             )
             .highlight_symbol("▸ ");
@@ -103,9 +103,9 @@ pub fn draw(
         // Right pane: Untracked
         let untracked_focused = state.focus == AuthorsPane::Untracked;
         let untracked_border_style = if untracked_focused {
-            Style::default().fg(Color::Cyan)
+            Style::default().fg(Color::LightCyan)
         } else {
-            Style::default().fg(Color::DarkGray)
+            Style::default().fg(Color::LightGray)
         };
         let untracked_filtered = state.filtered_list(&state.untracked);
         let untracked_items: Vec<ListItem<'_>> = untracked_filtered
@@ -131,7 +131,7 @@ pub fn draw(
             )
             .highlight_style(
                 Style::default()
-                    .bg(Color::Rgb(48, 56, 68))
+                    .bg(Color::Rgb(80, 90, 110))
                     .add_modifier(Modifier::BOLD),
             )
             .highlight_symbol("▸ ");
@@ -149,7 +149,7 @@ pub fn draw(
         let search_text = if state.search_query.is_empty() {
             Line::from(Span::styled(
                 "  / to search",
-                Style::default().fg(Color::DarkGray),
+                Style::default().fg(Color::LightGray),
             ))
         } else {
             Line::from(vec![

@@ -6,9 +6,9 @@ use crate::models::{ApprovalStatus, CiStatus, PullRequest};
 /// Style for CI status badges.
 pub fn ci_style(status: CiStatus) -> Style {
     match status {
-        CiStatus::Pending => Style::default().fg(Color::Yellow),
-        CiStatus::Success => Style::default().fg(Color::Green),
-        CiStatus::Failure => Style::default().fg(Color::Red),
+        CiStatus::Pending => Style::default().fg(Color::LightYellow),
+        CiStatus::Success => Style::default().fg(Color::LightGreen),
+        CiStatus::Failure => Style::default().fg(Color::LightRed),
     }
 }
 
@@ -24,10 +24,12 @@ pub fn ci_label(status: CiStatus) -> &'static str {
 /// Badge showing approval status of a PR.
 pub fn approval_badge(pr: &PullRequest) -> Span<'static> {
     match pr.approval_status {
-        ApprovalStatus::None => Span::styled("  no reviews", Style::default().fg(Color::DarkGray)),
-        ApprovalStatus::Approved => Span::styled("  approved", Style::default().fg(Color::Green)),
+        ApprovalStatus::None => Span::styled("  no reviews", Style::default().fg(Color::LightGray)),
+        ApprovalStatus::Approved => {
+            Span::styled("  approved", Style::default().fg(Color::LightGreen))
+        }
         ApprovalStatus::ChangesRequested => {
-            Span::styled("  changes requested", Style::default().fg(Color::Red))
+            Span::styled("  changes requested", Style::default().fg(Color::LightRed))
         }
     }
 }
@@ -38,7 +40,7 @@ pub fn involved_badge<'a>(pr: &PullRequest, username: &str) -> Span<'a> {
         Span::styled(
             "  involved",
             Style::default()
-                .fg(Color::Cyan)
+                .fg(Color::LightCyan)
                 .add_modifier(Modifier::BOLD),
         )
     } else {
@@ -53,9 +55,12 @@ pub fn review_badge<'a>(pr: &PullRequest, username: &str) -> Span<'a> {
     }
 
     if pr.user_is_involved(username) {
-        Span::styled("  review requested", Style::default().fg(Color::Yellow))
+        Span::styled(
+            "  review requested",
+            Style::default().fg(Color::LightYellow),
+        )
     } else if pr.user_has_reviewed {
-        Span::styled("  reviewed", Style::default().fg(Color::Green))
+        Span::styled("  reviewed", Style::default().fg(Color::LightGreen))
     } else {
         Span::raw("")
     }
@@ -210,21 +215,21 @@ mod tests {
     // ── ci_style tests ───────────────────────────────────────────────
 
     #[test]
-    fn ci_style_pending_is_yellow() {
+    fn ci_style_pending_is_light_yellow() {
         let style = ci_style(CiStatus::Pending);
-        assert_eq!(style.fg, Some(Color::Yellow));
+        assert_eq!(style.fg, Some(Color::LightYellow));
     }
 
     #[test]
-    fn ci_style_success_is_green() {
+    fn ci_style_success_is_light_green() {
         let style = ci_style(CiStatus::Success);
-        assert_eq!(style.fg, Some(Color::Green));
+        assert_eq!(style.fg, Some(Color::LightGreen));
     }
 
     #[test]
-    fn ci_style_failure_is_red() {
+    fn ci_style_failure_is_light_red() {
         let style = ci_style(CiStatus::Failure);
-        assert_eq!(style.fg, Some(Color::Red));
+        assert_eq!(style.fg, Some(Color::LightRed));
     }
 
     // ── ci_label tests ─────────────────────────────────────────────

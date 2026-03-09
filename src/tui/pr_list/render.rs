@@ -38,7 +38,7 @@ pub fn draw(
         Span::styled(
             "PR Tracker",
             Style::default()
-                .fg(Color::Cyan)
+                .fg(Color::LightCyan)
                 .add_modifier(Modifier::BOLD),
         ),
         Span::raw("  |  "),
@@ -57,7 +57,7 @@ pub fn draw(
                 Some(pr) => format!("Selected #{}/{}", pr.number, pr.repository),
                 None => "Selected none".to_string(),
             },
-            Style::default().fg(Color::Gray),
+            Style::default().fg(Color::LightGray),
         ),
     ]))
     .block(Block::default().borders(Borders::ALL).title("Overview"));
@@ -73,13 +73,13 @@ pub fn draw(
             let row_style = if index % 2 == 0 {
                 Style::default().fg(Color::White)
             } else {
-                Style::default().fg(Color::Gray)
+                Style::default().fg(Color::LightGray)
             };
             ListItem::new(vec![
                 Line::from(vec![
                     Span::styled(
                         format!("#{:<6}", pr.number),
-                        Style::default().fg(Color::Blue),
+                        Style::default().fg(Color::LightBlue),
                     ),
                     Span::styled(
                         format!("{} ", pr.author),
@@ -88,16 +88,16 @@ pub fn draw(
                     Span::styled(truncate(&pr.title, 72), row_style),
                 ]),
                 Line::from(vec![
-                    Span::styled("repo: ", Style::default().fg(Color::DarkGray)),
+                    Span::styled("repo: ", Style::default().fg(Color::LightGray)),
                     Span::styled(&pr.repository, Style::default().fg(Color::White)),
                     Span::raw("  "),
-                    Span::styled("ci: ", Style::default().fg(Color::DarkGray)),
+                    Span::styled("ci: ", Style::default().fg(Color::LightGray)),
                     Span::styled(
                         ci_label(pr.ci_status),
                         ci_style.add_modifier(Modifier::BOLD),
                     ),
                     if pr.draft {
-                        Span::styled("  draft", Style::default().fg(Color::Magenta))
+                        Span::styled("  draft", Style::default().fg(Color::LightMagenta))
                     } else {
                         Span::raw("")
                     },
@@ -107,7 +107,7 @@ pub fn draw(
                 ]),
                 Line::from(Span::styled(
                     pr.updates_since_last_ack(),
-                    Style::default().fg(Color::DarkGray),
+                    Style::default().fg(Color::LightGray),
                 )),
                 Line::raw(""),
             ])
@@ -122,7 +122,7 @@ pub fn draw(
         )
         .highlight_style(
             Style::default()
-                .bg(Color::Rgb(48, 56, 68))
+                .bg(Color::Rgb(80, 90, 110))
                 .add_modifier(Modifier::BOLD),
         )
         .highlight_symbol("▸ ");

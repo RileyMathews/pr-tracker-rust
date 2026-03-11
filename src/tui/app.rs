@@ -95,7 +95,7 @@ fn review_pr_in_octo_mode(
 
     let review_result = Command::new("nvim")
         .arg("-c")
-        .arg(format!(":Octo review {pr_url}"))
+        .arg(format!(":Octo {pr_url}"))
         .status();
 
     let mut restore_error = None;

@@ -122,7 +122,7 @@ impl DatabaseRepository {
                             'review_state', c.review_state
                         )
                         ORDER BY c.created_at_unix ASC
-                    ),
+                    ) FILTER (WHERE c.id IS NOT NULL),
                     '[]'
                 ) as comments_json
             FROM pull_requests pr
@@ -180,7 +180,7 @@ impl DatabaseRepository {
                             'review_state', c.review_state
                         )
                         ORDER BY c.created_at_unix ASC
-                    ),
+                    ) FILTER (WHERE c.id IS NOT NULL),
                     '[]'
                 ) as comments_json
             FROM pull_requests pr
@@ -259,7 +259,7 @@ impl DatabaseRepository {
                             'review_state', c.review_state
                         )
                         ORDER BY c.created_at_unix ASC
-                    ),
+                    ) FILTER (WHERE c.id IS NOT NULL),
                     '[]'
                 ) as comments_json
             FROM pull_requests pr
@@ -473,30 +473,59 @@ impl PrCommentRow {
 
 #[derive(Debug, serde::Deserialize)]
 struct CommentJson {
-    id: String,
-    repository: String,
-    pr_number: i64,
-    author: String,
-    body: String,
-    created_at_unix: i64,
-    updated_at_unix: i64,
-    is_review_comment: i64, // stored as 0/1 in JSON
+    id: Option<String>,
+    repository: Option<String>,
+    pr_number: Option<i64>,
+    author: Option<String>,
+    body: Option<String>,
+    created_at_unix: Option<i64>,
+    updated_at_unix: Option<i64>,
+    is_review_comment: Option<i64>, // stored as 0/1 in JSON
     review_state: Option<String>,
 }
 
 impl CommentJson {
-    fn into_model(self) -> anyhow::Result<PrComment> {
-        Ok(PrComment {
-            id: self.id,
-            repository: self.repository,
-            pr_number: self.pr_number,
-            author: self.author,
-            body: self.body,
-            created_at: unix_to_datetime(self.created_at_unix)?,
-            updated_at: unix_to_datetime(self.updated_at_unix)?,
-            is_review_comment: self.is_review_comment != 0,
+    fn into_model(self) -> anyhow::Result<Option<PrComment>> {
+        if self.id.is_none() {
+            return Ok(None);
+        }
+
+        let id = self
+            .id
+            .ok_or_else(|| anyhow::anyhow!("missing comment field: id"))?;
+        let repository = self
+            .repository
+            .ok_or_else(|| anyhow::anyhow!("missing comment field: repository"))?;
+        let pr_number = self
+            .pr_number
+            .ok_or_else(|| anyhow::anyhow!("missing comment field: pr_number"))?;
+        let author = self
+            .author
+            .ok_or_else(|| anyhow::anyhow!("missing comment field: author"))?;
+        let body = self
+            .body
+            .ok_or_else(|| anyhow::anyhow!("missing comment field: body"))?;
+        let created_at_unix = self
+            .created_at_unix
+            .ok_or_else(|| anyhow::anyhow!("missing comment field: created_at_unix"))?;
+        let updated_at_unix = self
+            .updated_at_unix
+            .ok_or_else(|| anyhow::anyhow!("missing comment field: updated_at_unix"))?;
+        let is_review_comment = self
+            .is_review_comment
+            .ok_or_else(|| anyhow::anyhow!("missing comment field: is_review_comment"))?;
+
+        Ok(Some(PrComment {
+            id,
+            repository,
+            pr_number,
+            author,
+            body,
+            created_at: unix_to_datetime(created_at_unix)?,
+            updated_at: unix_to_datetime(updated_at_unix)?,
+            is_review_comment: is_review_comment != 0,
             review_state: self.review_state,
-        })
+        }))
     }
 }
 
@@ -536,7 +565,10 @@ impl PullRequestWithCommentsRow {
         let comments: Vec<PrComment> = comments
             .into_iter()
             .map(|c| c.into_model())
-            .collect::<Result<Vec<_>, _>>()?;
+            .collect::<Result<Vec<_>, _>>()?
+            .into_iter()
+            .flatten()
+            .collect();
 
         // Build and return the PullRequest (copy the pattern from existing PullRequestRow::into_model)
         Ok(PullRequest {

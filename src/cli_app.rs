@@ -258,11 +258,13 @@ async fn handle_sync(repo: &DatabaseRepository) -> anyhow::Result<()> {
     let _ = notify_sync_changes(&summary, &username);
 
     println!(
-        "Sync complete: repos={} new={} updated={} deleted={}",
+        "Sync complete: repos={} new={} updated_data={} updated_attention={} deleted={} reasons={:?}",
         summary.synced_repositories,
         summary.new_prs.len(),
-        summary.updated_prs.len(),
-        summary.deleted_prs.len()
+        summary.updated_data_prs.len(),
+        summary.updated_attention_prs.len(),
+        summary.deleted_prs.len(),
+        summary.updated_reason_counts
     );
     Ok(())
 }
@@ -281,7 +283,7 @@ async fn handle_prs(repo: &DatabaseRepository) -> anyhow::Result<()> {
 }
 
 fn notify_sync_changes(summary: &SyncRunSummary, username: &str) -> anyhow::Result<()> {
-    if summary.new_prs.is_empty() && summary.updated_prs.is_empty() {
+    if summary.new_prs.is_empty() && summary.updated_attention_prs.is_empty() {
         return Ok(());
     }
 
@@ -304,7 +306,7 @@ fn notify_sync_changes(summary: &SyncRunSummary, username: &str) -> anyhow::Resu
                 .show()?;
         }
 
-        for pr in &summary.updated_prs {
+        for pr in &summary.updated_attention_prs {
             if !pr.should_notify_on_changes(username) {
                 continue;
             }
@@ -333,13 +335,15 @@ fn log_sync_progress(progress: SyncProgress) {
         SyncProgress::FullSyncRepositoryCompleted {
             repository,
             new_prs,
-            updated_prs,
+            updated_data_prs,
+            updated_attention_prs,
+            updated_reason_counts,
             deleted_prs,
             ..
         } => {
             eprintln!(
-                "[sync] repository complete: {repository} new={} updated={} deleted={}",
-                new_prs, updated_prs, deleted_prs
+                "[sync] repository complete: {repository} new={} updated_data={} updated_attention={} deleted={} reasons={:?}",
+                new_prs, updated_data_prs, updated_attention_prs, deleted_prs, updated_reason_counts
             );
         }
         _ => {}

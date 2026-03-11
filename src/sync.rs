@@ -1,11 +1,14 @@
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashSet};
 use std::sync::Arc;
 
 use chrono::{DateTime, Utc};
 use tokio::sync::Semaphore;
 use tokio::task::JoinSet;
 
-use crate::core::{process_pull_request_sync_results, SyncDiff};
+use crate::core::{
+    count_update_reasons, partition_updated_pull_requests, process_pull_request_sync_results,
+    SyncDiff,
+};
 use crate::db::DatabaseRepository;
 use crate::github::GitHubClient;
 use crate::models::{PullRequest, TrackedRepository};
@@ -59,7 +62,9 @@ fn effective_tracked_authors(tracked_authors: &[String], username: &str) -> Vec<
 pub struct SyncRunSummary {
     pub synced_repositories: usize,
     pub new_prs: Vec<PullRequest>,
-    pub updated_prs: Vec<PullRequest>,
+    pub updated_data_prs: Vec<PullRequest>,
+    pub updated_attention_prs: Vec<PullRequest>,
+    pub updated_reason_counts: BTreeMap<String, usize>,
     pub deleted_prs: Vec<PullRequest>,
 }
 
@@ -78,7 +83,9 @@ pub enum SyncProgress {
         repository_index: usize,
         total_repositories: usize,
         new_prs: usize,
-        updated_prs: usize,
+        updated_data_prs: usize,
+        updated_attention_prs: usize,
+        updated_reason_counts: BTreeMap<String, usize>,
         deleted_prs: usize,
     },
 }
@@ -87,8 +94,16 @@ struct RepoSyncResult {
     repo_name: String,
     repo_index: usize,
     new_prs: Vec<PullRequest>,
-    updated_prs: Vec<PullRequest>,
+    updated_data_prs: Vec<PullRequest>,
+    updated_attention_prs: Vec<PullRequest>,
+    updated_reason_counts: BTreeMap<String, usize>,
     deleted_prs: Vec<PullRequest>,
+}
+
+fn merge_reason_counts(target: &mut BTreeMap<String, usize>, source: BTreeMap<String, usize>) {
+    for (reason, count) in source {
+        *target.entry(reason).or_insert(0) += count;
+    }
 }
 
 pub async fn sync_all_tracked(
@@ -153,12 +168,23 @@ where
             repository_index: repo_result.repo_index,
             total_repositories,
             new_prs: repo_result.new_prs.len(),
-            updated_prs: repo_result.updated_prs.len(),
+            updated_data_prs: repo_result.updated_data_prs.len(),
+            updated_attention_prs: repo_result.updated_attention_prs.len(),
+            updated_reason_counts: repo_result.updated_reason_counts.clone(),
             deleted_prs: repo_result.deleted_prs.len(),
         });
         summary.synced_repositories += 1;
         summary.new_prs.extend(repo_result.new_prs);
-        summary.updated_prs.extend(repo_result.updated_prs);
+        summary
+            .updated_data_prs
+            .extend(repo_result.updated_data_prs);
+        summary
+            .updated_attention_prs
+            .extend(repo_result.updated_attention_prs);
+        merge_reason_counts(
+            &mut summary.updated_reason_counts,
+            repo_result.updated_reason_counts,
+        );
         summary.deleted_prs.extend(repo_result.deleted_prs);
     }
 
@@ -212,10 +238,13 @@ async fn sync_single_repo(
         removed_prs: _, // We handle removals via closed_pr_numbers instead
     } = process_pull_request_sync_results(&existing_prs, &fresh_prs, Utc::now());
 
+    let updated_reason_counts = count_update_reasons(&updated_prs);
+    let (updated_data_prs, updated_attention_prs) = partition_updated_pull_requests(updated_prs);
+
     for pr in &new_prs {
         repository.save_pr(pr).await?;
     }
-    for pr in &updated_prs {
+    for pr in &updated_data_prs {
         repository.save_pr(pr).await?;
     }
 
@@ -254,7 +283,9 @@ async fn sync_single_repo(
         repo_name: repo_name.clone(),
         repo_index,
         new_prs,
-        updated_prs,
+        updated_data_prs,
+        updated_attention_prs,
+        updated_reason_counts,
         deleted_prs,
     })
 }

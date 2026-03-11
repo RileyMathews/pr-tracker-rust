@@ -26,11 +26,13 @@ async fn main() -> anyhow::Result<()> {
         match sync_all_tracked(&repo, &github, &username).await {
             Ok(summary) => {
                 println!(
-                    "sync ok repos={} new={} updated={} deleted={}",
+                    "sync ok repos={} new={} updated_data={} updated_attention={} deleted={} reasons={:?}",
                     summary.synced_repositories,
                     summary.new_prs.len(),
-                    summary.updated_prs.len(),
-                    summary.deleted_prs.len()
+                    summary.updated_data_prs.len(),
+                    summary.updated_attention_prs.len(),
+                    summary.deleted_prs.len(),
+                    summary.updated_reason_counts
                 );
             }
             Err(err) => eprintln!("sync failed: {err:#}"),

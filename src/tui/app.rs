@@ -1,4 +1,5 @@
 use std::io;
+use std::process::Command;
 use std::time::Duration;
 
 use crossterm::event::{self, Event};
@@ -61,20 +62,60 @@ pub async fn run() -> anyhow::Result<()> {
 
 /// Set up terminal and run the TUI inner loop.
 async fn run_tui(app_state: AppState, repo: &DatabaseRepository) -> anyhow::Result<()> {
+    let mut terminal = init_terminal()?;
+
+    let result = run_tui_inner(&mut terminal, app_state, repo).await;
+
+    // Always restore terminal, even on error
+    let _ = restore_terminal();
+
+    result
+}
+
+fn init_terminal() -> anyhow::Result<Terminal<CrosstermBackend<io::Stdout>>> {
     enable_raw_mode()?;
     let mut stdout = io::stdout();
     stdout.execute(EnterAlternateScreen)?;
 
     let backend = CrosstermBackend::new(stdout);
-    let mut terminal = Terminal::new(backend)?;
+    Ok(Terminal::new(backend)?)
+}
 
-    let result = run_tui_inner(&mut terminal, app_state, repo).await;
+fn restore_terminal() -> anyhow::Result<()> {
+    disable_raw_mode()?;
+    io::stdout().execute(LeaveAlternateScreen)?;
+    Ok(())
+}
 
-    // Always restore terminal, even on error
-    let _ = disable_raw_mode();
-    let _ = io::stdout().execute(LeaveAlternateScreen);
+fn review_pr_in_octo_mode(
+    terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
+    pr_url: &str,
+) -> anyhow::Result<()> {
+    restore_terminal()?;
 
-    result
+    let review_result = Command::new("nvim")
+        .arg("-c")
+        .arg(format!(":Octo review {pr_url}"))
+        .status();
+
+    let mut restore_error = None;
+    if let Err(err) = init_terminal().map(|new_terminal| {
+        *terminal = new_terminal;
+    }) {
+        restore_error = Some(err);
+    }
+
+    if let Some(err) = restore_error {
+        return Err(err);
+    }
+
+    terminal.clear()?;
+
+    match review_result {
+        Ok(status) if status.success() => Ok(()),
+        Ok(status) => anyhow::bail!("Neovim exited with status {status}"),
+        Err(err) => Err(err.into()),
+    }
 }
 
 /// Main TUI event loop.
@@ -160,8 +201,10 @@ async fn run_tui_inner(
             if let Event::Key(key) = event::read()? {
                 match app_state.current_screen {
                     Screen::PrList => {
+                        app_state.shared.error = None;
+
                         match pr_list::events::handle_event(
-                            key.code,
+                            key,
                             &mut app_state.pr_list,
                             &mut app_state.shared,
                             &active_job,
@@ -180,17 +223,25 @@ async fn run_tui_inner(
                                     spawn_teams_fetch(repo.clone(), tx.clone());
                                 }
                             }
+                            EventResult::ReviewPr(pr_url) => {
+                                if let Err(err) = review_pr_in_octo_mode(terminal, &pr_url) {
+                                    app_state.shared.error = Some(format!(
+                                        "Could not open Octo review for {pr_url}: {err}"
+                                    ));
+                                }
+                            }
                             EventResult::Continue => {}
                         }
                     }
                     Screen::AuthorsFromTeams => {
-                        match authors::events::handle_event(key.code, &mut app_state.authors, repo)
+                        match authors::events::handle_event(key, &mut app_state.authors, repo)
                             .await?
                         {
                             EventResult::Quit => should_quit = true,
                             EventResult::SwitchScreen(screen) => {
                                 app_state.current_screen = screen;
                             }
+                            EventResult::ReviewPr(_) => {}
                             EventResult::Continue => {}
                         }
                     }

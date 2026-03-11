@@ -75,6 +75,13 @@ pub fn draw(
             },
             Style::default().fg(Color::Gray),
         ),
+        match &shared.error {
+            Some(error) => Span::styled(
+                format!("  |  Error: {}", truncate(error, 60)),
+                Style::default().fg(Color::Red),
+            ),
+            None => Span::raw(""),
+        },
     ]))
     .block(Block::default().borders(Borders::ALL).title("Overview"));
     frame.render_widget(header, chunks[0]);
@@ -113,7 +120,7 @@ pub fn draw(
     };
 
     let footer = Paragraph::new(format!(
-        "tab: switch pane  |  j/k or arrows: move  |  enter/space: open PR  |  a: acknowledge  |  v: toggle view  |  s: full sync  |  t: authors from teams  |  q: quit{}",
+        "tab: switch pane  |  j/k or arrows: move  |  enter/space: open PR  |  ctrl+r: octo review  |  a: acknowledge  |  v: toggle view  |  s: full sync  |  t: authors from teams  |  q: quit{}",
         spinner
     ))
     .block(Block::default().borders(Borders::TOP));

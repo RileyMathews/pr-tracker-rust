@@ -5,11 +5,16 @@ use crate::scoring;
 pub struct SharedState {
     pub prs: Vec<PullRequest>,
     pub username: String,
+    pub error: Option<String>,
 }
 
 impl SharedState {
     pub fn new(prs: Vec<PullRequest>, username: String) -> Self {
-        Self { prs, username }
+        Self {
+            prs,
+            username,
+            error: None,
+        }
     }
 
     pub fn filtered_indices(&self, view_mode: super::navigation::ViewMode) -> Vec<usize> {

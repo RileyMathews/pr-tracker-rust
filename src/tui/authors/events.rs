@@ -1,4 +1,4 @@
-use crossterm::event::KeyCode;
+use crossterm::event::{KeyCode, KeyEvent, KeyEventKind};
 
 use crate::db::DatabaseRepository;
 use crate::tui::authors::State;
@@ -7,10 +7,16 @@ use crate::tui::pr_list::events::EventResult;
 
 /// Handle a key event for the Authors screen.
 pub async fn handle_event(
-    key_code: KeyCode,
+    key_event: KeyEvent,
     state: &mut State,
     repo: &DatabaseRepository,
 ) -> anyhow::Result<EventResult> {
+    if key_event.kind != KeyEventKind::Press {
+        return Ok(EventResult::Continue);
+    }
+
+    let key_code = key_event.code;
+
     if state.loading {
         // When loading, only allow Esc and 'q' to exit
         match key_code {

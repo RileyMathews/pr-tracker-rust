@@ -1,4 +1,4 @@
-use crossterm::event::KeyCode;
+use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 
 use crate::db::DatabaseRepository;
 use crate::tui::navigation::Screen;
@@ -17,17 +17,49 @@ pub enum EventResult {
     Quit,
     /// Switch to a different screen.
     SwitchScreen(Screen),
+    /// Launch PR review for the selected PR.
+    ReviewPr(String),
+}
+
+fn review_pr_url_for_event(
+    key_event: KeyEvent,
+    state: &State,
+    shared: &SharedState,
+) -> Option<String> {
+    if key_event.kind != KeyEventKind::Press {
+        return None;
+    }
+
+    if !(key_event.modifiers.contains(KeyModifiers::CONTROL)
+        && matches!(key_event.code, KeyCode::Char('r') | KeyCode::Char('R')))
+    {
+        return None;
+    }
+
+    state
+        .selected_index_for_focus(&shared.prs, &shared.username)
+        .map(|pr_index| shared.prs[pr_index].url())
 }
 
 /// Handle a key event for the PR List screen.
 pub async fn handle_event(
-    key_code: KeyCode,
+    key_event: KeyEvent,
     state: &mut State,
     shared: &mut SharedState,
     active_job: &Option<BackgroundJob>,
     repo: &DatabaseRepository,
     tx: &mpsc::UnboundedSender<BackgroundMessage>,
 ) -> anyhow::Result<EventResult> {
+    if let Some(pr_url) = review_pr_url_for_event(key_event, state, shared) {
+        return Ok(EventResult::ReviewPr(pr_url));
+    }
+
+    if key_event.kind != KeyEventKind::Press {
+        return Ok(EventResult::Continue);
+    }
+
+    let key_code = key_event.code;
+
     match key_code {
         KeyCode::Char('q') => Ok(EventResult::Quit),
 
@@ -111,5 +143,66 @@ pub async fn handle_event(
         }
 
         _ => Ok(EventResult::Continue),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::models::{ApprovalStatus, CiStatus, PullRequest};
+    use chrono::DateTime;
+
+    fn test_pr(number: i64, author: &str) -> PullRequest {
+        PullRequest {
+            number,
+            title: "Test PR".to_string(),
+            repository: "owner/repo".to_string(),
+            author: author.to_string(),
+            head_sha: "abc123".to_string(),
+            draft: false,
+            created_at: DateTime::UNIX_EPOCH,
+            updated_at: DateTime::UNIX_EPOCH,
+            ci_status: CiStatus::Pending,
+            last_comment_at: DateTime::UNIX_EPOCH,
+            last_commit_at: DateTime::UNIX_EPOCH,
+            last_ci_status_update_at: DateTime::UNIX_EPOCH,
+            approval_status: ApprovalStatus::None,
+            last_review_status_update_at: DateTime::UNIX_EPOCH,
+            last_acknowledged_at: None,
+            requested_reviewers: Vec::new(),
+            user_has_reviewed: false,
+            comments: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn review_pr_url_for_event_returns_selected_pr_url_for_ctrl_r() {
+        let state = State::new();
+        let shared = SharedState::new(vec![test_pr(42, "bob")], "alice".to_string());
+        let key_event = KeyEvent::new(KeyCode::Char('r'), KeyModifiers::CONTROL);
+
+        assert_eq!(
+            review_pr_url_for_event(key_event, &state, &shared),
+            Some("https://github.com/owner/repo/pull/42".to_string())
+        );
+    }
+
+    #[test]
+    fn review_pr_url_for_event_ignores_non_press_events() {
+        let state = State::new();
+        let shared = SharedState::new(vec![test_pr(42, "bob")], "alice".to_string());
+        let mut key_event = KeyEvent::new(KeyCode::Char('r'), KeyModifiers::CONTROL);
+        key_event.kind = KeyEventKind::Release;
+
+        assert_eq!(review_pr_url_for_event(key_event, &state, &shared), None);
+    }
+
+    #[test]
+    fn review_pr_url_for_event_returns_none_without_selection() {
+        let state = State::new();
+        let shared = SharedState::new(vec![], "alice".to_string());
+        let key_event = KeyEvent::new(KeyCode::Char('r'), KeyModifiers::CONTROL);
+
+        assert_eq!(review_pr_url_for_event(key_event, &state, &shared), None);
     }
 }

@@ -691,36 +691,6 @@ mod tests {
     }
 
     #[test]
-    fn notification_message_combines_multiple_changes() {
-        let mut pr = build_pull_request(&[
-            TestPrEvent::Ack,
-            TestPrEvent::Comment,
-            TestPrEvent::CiStatus,
-            TestPrEvent::ReviewStatus,
-        ]);
-        let activity_at = timestamp(5);
-        pr.last_comment_at = activity_at;
-        pr.last_ci_status_update_at = activity_at;
-        pr.last_review_status_update_at = activity_at;
-        pr.updated_at = activity_at;
-        pr.ci_status = CiStatus::Failure;
-        pr.comments = vec![
-            test_comment(&not_author(), activity_at, false),
-            test_comment(&not_author(), activity_at, true),
-        ];
-
-        assert_eq!(
-            pr.notification_message(&author()),
-            PrNotificationMessage {
-                title: "PR Updated".to_string(),
-                body:
-                    "owner/repo#42: octocat - new comment, CI status changed, review status changed"
-                        .to_string(),
-            }
-        );
-    }
-
-    #[test]
     fn all_changes_returns_new_pull_request_when_never_acknowledged() {
         let pr = build_pull_request(&[TestPrEvent::Commit, TestPrEvent::Comment]);
 

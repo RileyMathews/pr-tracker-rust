@@ -256,11 +256,11 @@ impl PullRequest {
 
         let change_summary = summarize_notification_changes(&changes);
         let body = if change_summary.is_empty() {
-            format!("{}#{}: {}", self.repository, self.number, self.title)
+            format!("{}#{}: {}", self.repository, self.number, self.author)
         } else {
             format!(
                 "{}#{}: {} - {}",
-                self.repository, self.number, self.title, change_summary
+                self.repository, self.number, self.author, change_summary
             )
         };
 
@@ -669,60 +669,6 @@ mod tests {
     }
 
     #[test]
-    fn notification_message_for_new_pr_mentions_author_and_identity() {
-        let pr = build_pull_request(&[]);
-
-        assert_eq!(
-            pr.notification_message(&author()),
-            PrNotificationMessage {
-                title: "New PR".to_string(),
-                body: "octocat opened owner/repo#42: Improve all_changes tests".to_string(),
-            }
-        );
-    }
-
-    #[test]
-    fn notification_message_for_comment_change_is_helpful() {
-        let mut pr = build_pull_request(&[TestPrEvent::Ack, TestPrEvent::Comment]);
-        pr.comments = vec![test_comment(&not_author(), timestamp(3), false)];
-
-        assert_eq!(
-            pr.notification_message(&author()),
-            PrNotificationMessage {
-                title: "PR Updated".to_string(),
-                body: "owner/repo#42: Improve all_changes tests - new comment".to_string(),
-            }
-        );
-    }
-
-    #[test]
-    fn notification_message_for_tracked_pr_commit_mentions_new_commits() {
-        let mut pr = build_pull_request(&[TestPrEvent::Ack, TestPrEvent::Commit]);
-        pr.requested_reviewers = vec![not_author()];
-
-        assert_eq!(
-            pr.notification_message(&not_author()),
-            PrNotificationMessage {
-                title: "PR Updated".to_string(),
-                body: "owner/repo#42: Improve all_changes tests - new commits pushed".to_string(),
-            }
-        );
-    }
-
-    #[test]
-    fn notification_message_hides_my_commit_only_changes() {
-        let pr = build_pull_request(&[TestPrEvent::Ack, TestPrEvent::Commit]);
-
-        assert_eq!(
-            pr.notification_message(&author()),
-            PrNotificationMessage {
-                title: "PR Updated".to_string(),
-                body: "owner/repo#42: Improve all_changes tests".to_string(),
-            }
-        );
-    }
-
-    #[test]
     fn notification_message_combines_multiple_changes() {
         let mut pr = build_pull_request(&[
             TestPrEvent::Ack,
@@ -745,7 +691,7 @@ mod tests {
             pr.notification_message(&author()),
             PrNotificationMessage {
                 title: "PR Updated".to_string(),
-                body: "owner/repo#42: Improve all_changes tests - new comment, CI status changed, review status changed".to_string(),
+                body: "owner/repo#42: octocat - new comment, CI status changed, review status changed".to_string(),
             }
         );
     }

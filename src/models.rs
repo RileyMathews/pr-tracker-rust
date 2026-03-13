@@ -20,6 +20,16 @@ pub enum CiStatus {
     Failure,
 }
 
+impl std::fmt::Display for CiStatus {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::Pending => "pending",
+            Self::Success => "succeeded",
+            Self::Failure => "failed",
+        })
+    }
+}
+
 impl CiStatus {
     pub fn as_i64(self) -> i64 {
         match self {
@@ -250,6 +260,18 @@ impl PullRequest {
                 body: format!(
                     "{} opened {}#{}: {}",
                     self.author, self.repository, self.number, self.title
+                ),
+            };
+        }
+
+        if self.perspective(current_user) == PrPerspective::MyPr
+            && changes.contains(&ChangeKind::NewCistatus)
+        {
+            return PrNotificationMessage {
+                title: "Your PR CI has run".to_string(),
+                body: format!(
+                    "Your checks on {}:{} have {}",
+                    self.repository, self.number, self.ci_status
                 ),
             };
         }
@@ -691,7 +713,9 @@ mod tests {
             pr.notification_message(&author()),
             PrNotificationMessage {
                 title: "PR Updated".to_string(),
-                body: "owner/repo#42: octocat - new comment, CI status changed, review status changed".to_string(),
+                body:
+                    "owner/repo#42: octocat - new comment, CI status changed, review status changed"
+                        .to_string(),
             }
         );
     }

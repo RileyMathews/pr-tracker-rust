@@ -152,7 +152,7 @@ impl PullRequest {
         changes
     }
 
-    pub fn meaningful_changes(&self, current_user: &str) -> Vec<ChangeKind> {
+    fn ack_display_changes(&self, current_user: &str) -> Vec<ChangeKind> {
         let perspective = self.perspective(current_user);
         let last_ack = self.last_acknowledged_at;
 
@@ -178,7 +178,7 @@ impl PullRequest {
     }
 
     pub fn is_acknowledged_for_user(&self, current_user: &str) -> bool {
-        self.last_acknowledged_at.is_some() && self.meaningful_changes(current_user).is_empty()
+        self.last_acknowledged_at.is_some() && self.ack_display_changes(current_user).is_empty()
     }
 
     pub fn should_notify_on_changes(&self, current_user: &str) -> bool {
@@ -194,14 +194,9 @@ impl PullRequest {
             PrPerspective::MyPr
         ));
 
-        self.meaningful_changes(current_user)
+        self.all_changes()
             .into_iter()
-            .any(|change| {
-                matches!(
-                    change,
-                    ChangeKind::NewComment | ChangeKind::NewCistatus | ChangeKind::NewReviewStatus
-                )
-            })
+            .any(Self::notify_change_is_allowed_for_my_pr)
     }
 
     fn should_notify_for_tracked_pr(&self, current_user: &str) -> bool {
@@ -210,11 +205,17 @@ impl PullRequest {
             PrPerspective::TrackedPr
         ));
 
-        !self.meaningful_changes(current_user).is_empty()
+        if !self.user_is_or_was_involved(current_user) {
+            return false;
+        }
+
+        self.all_changes()
+            .into_iter()
+            .any(Self::notify_change_is_allowed_for_tracked_pr)
     }
 
     pub fn updates_since_last_ack(&self, current_user: &str) -> String {
-        let changes = self.meaningful_changes(current_user);
+        let changes = self.ack_display_changes(current_user);
 
         if changes.is_empty() {
             return "  ".to_string();
@@ -248,8 +249,30 @@ impl PullRequest {
             .any(|reviewer| reviewer.eq_ignore_ascii_case(current_user))
     }
 
-    fn commit_changes_are_meaningful_for_user(&self, current_user: &str) -> bool {
+    fn user_is_or_was_involved(&self, current_user: &str) -> bool {
         self.user_is_involved(current_user) || self.user_has_reviewed
+    }
+
+    fn commit_changes_are_meaningful_for_user(&self, current_user: &str) -> bool {
+        self.user_is_or_was_involved(current_user)
+    }
+
+    fn notify_change_is_allowed_for_my_pr(change: ChangeKind) -> bool {
+        matches!(
+            change,
+            ChangeKind::NewComment | ChangeKind::NewCistatus | ChangeKind::NewReviewStatus
+        )
+    }
+
+    fn notify_change_is_allowed_for_tracked_pr(change: ChangeKind) -> bool {
+        matches!(
+            change,
+            ChangeKind::NewComment
+                | ChangeKind::NewCommit
+                | ChangeKind::NewCistatus
+                | ChangeKind::NewReviewStatus
+                | ChangeKind::NewPullRequest
+        )
     }
 
     fn ci_change_is_meaningful(&self) -> bool {
@@ -384,8 +407,8 @@ mod tests {
     }
 
     #[test]
-    fn should_notify_returns_true() {
-        assert!(build_pull_request(&[]).should_notify_on_changes("foo"));
+    fn should_notify_returns_false_for_uninvolved_user() {
+        assert!(!build_pull_request(&[]).should_notify_on_changes("foo"));
     }
 
     #[test]
@@ -396,10 +419,10 @@ mod tests {
     }
 
     #[test]
-    fn notify_returns_true_for_new_pr_by_other_author() {
+    fn notify_returns_false_for_new_pr_by_other_author_when_uninvolved() {
         let pr = build_pull_request(&[]);
 
-        assert!(pr.should_notify_on_changes(&not_author()));
+        assert!(!pr.should_notify_on_changes(&not_author()));
     }
 
     #[test]
@@ -428,7 +451,7 @@ mod tests {
     fn meaningful_changes_ignores_new_commit_for_my_pr() {
         let pr = build_pull_request(&[TestPrEvent::Ack, TestPrEvent::Commit]);
 
-        assert!(pr.meaningful_changes(&author()).is_empty());
+        assert!(pr.ack_display_changes(&author()).is_empty());
     }
 
     #[test]
@@ -437,7 +460,7 @@ mod tests {
         pr.requested_reviewers = vec![not_author()];
 
         assert_eq!(
-            pr.meaningful_changes(&not_author()),
+            pr.ack_display_changes(&not_author()),
             vec![ChangeKind::NewCommit]
         );
     }
@@ -446,7 +469,17 @@ mod tests {
     fn meaningful_changes_ignores_new_commit_for_unrelated_tracked_pr() {
         let pr = build_pull_request(&[TestPrEvent::Ack, TestPrEvent::Commit]);
 
-        assert!(pr.meaningful_changes("reviewer").is_empty());
+        assert!(pr.ack_display_changes("reviewer").is_empty());
+    }
+
+    #[test]
+    fn ack_display_changes_keeps_new_pr_for_author() {
+        let pr = build_pull_request(&[]);
+
+        assert_eq!(
+            pr.ack_display_changes(&author()),
+            vec![ChangeKind::NewPullRequest]
+        );
     }
 
     #[test]
@@ -455,7 +488,7 @@ mod tests {
         pr.user_has_reviewed = true;
 
         assert_eq!(
-            pr.meaningful_changes("reviewer"),
+            pr.ack_display_changes("reviewer"),
             vec![ChangeKind::NewCommit]
         );
     }
@@ -545,12 +578,29 @@ mod tests {
     }
 
     #[test]
+    fn notify_returns_true_for_pending_ci_change_on_involved_tracked_pr() {
+        let mut pr = build_pull_request(&[TestPrEvent::Ack, TestPrEvent::CiStatus]);
+        pr.ci_status = CiStatus::Pending;
+        pr.requested_reviewers = vec![not_author()];
+
+        assert!(pr.should_notify_on_changes(&not_author()));
+    }
+
+    #[test]
+    fn notify_returns_true_for_commit_on_previously_reviewed_tracked_pr() {
+        let mut pr = build_pull_request(&[TestPrEvent::Ack, TestPrEvent::Commit]);
+        pr.user_has_reviewed = true;
+
+        assert!(pr.should_notify_on_changes("reviewer"));
+    }
+
+    #[test]
     fn meaningful_changes_keeps_non_pending_ci_change() {
         let mut pr = build_pull_request(&[TestPrEvent::Ack, TestPrEvent::CiStatus]);
         pr.ci_status = CiStatus::Failure;
 
         assert_eq!(
-            pr.meaningful_changes(&not_author()),
+            pr.ack_display_changes(&not_author()),
             vec![ChangeKind::NewCistatus]
         );
     }

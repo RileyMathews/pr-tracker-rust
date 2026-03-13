@@ -79,6 +79,12 @@ pub enum PrPerspective {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PrNotificationMessage {
+    pub title: String,
+    pub body: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PullRequest {
     pub number: i64,
     pub title: String,
@@ -235,6 +241,35 @@ impl PullRequest {
         updates
     }
 
+    pub fn notification_message(&self, current_user: &str) -> PrNotificationMessage {
+        let changes = self.ack_display_changes(current_user);
+
+        if changes.contains(&ChangeKind::NewPullRequest) {
+            return PrNotificationMessage {
+                title: "New PR".to_string(),
+                body: format!(
+                    "{} opened {}#{}: {}",
+                    self.author, self.repository, self.number, self.title
+                ),
+            };
+        }
+
+        let change_summary = summarize_notification_changes(&changes);
+        let body = if change_summary.is_empty() {
+            format!("{}#{}: {}", self.repository, self.number, self.title)
+        } else {
+            format!(
+                "{}#{}: {} - {}",
+                self.repository, self.number, self.title, change_summary
+            )
+        };
+
+        PrNotificationMessage {
+            title: "PR Updated".to_string(),
+            body,
+        }
+    }
+
     pub fn user_is_involved(&self, current_user: &str) -> bool {
         if current_user.is_empty() {
             return false;
@@ -311,6 +346,20 @@ impl PullRequest {
 
 fn author_matches_user(author: &str, current_user: &str) -> bool {
     !current_user.is_empty() && author.eq_ignore_ascii_case(current_user)
+}
+
+fn summarize_notification_changes(changes: &[ChangeKind]) -> String {
+    changes
+        .iter()
+        .map(|change| match change {
+            ChangeKind::NewComment => "new comment",
+            ChangeKind::NewCommit => "new commits pushed",
+            ChangeKind::NewCistatus => "CI status changed",
+            ChangeKind::NewReviewStatus => "review status changed",
+            ChangeKind::NewPullRequest => "new PR",
+        })
+        .collect::<Vec<_>>()
+        .join(", ")
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -617,6 +666,88 @@ mod tests {
         let pr = build_pull_request(&[]);
 
         assert_eq!(pr.updates_since_last_ack(&author()), "  New PR | ");
+    }
+
+    #[test]
+    fn notification_message_for_new_pr_mentions_author_and_identity() {
+        let pr = build_pull_request(&[]);
+
+        assert_eq!(
+            pr.notification_message(&author()),
+            PrNotificationMessage {
+                title: "New PR".to_string(),
+                body: "octocat opened owner/repo#42: Improve all_changes tests".to_string(),
+            }
+        );
+    }
+
+    #[test]
+    fn notification_message_for_comment_change_is_helpful() {
+        let mut pr = build_pull_request(&[TestPrEvent::Ack, TestPrEvent::Comment]);
+        pr.comments = vec![test_comment(&not_author(), timestamp(3), false)];
+
+        assert_eq!(
+            pr.notification_message(&author()),
+            PrNotificationMessage {
+                title: "PR Updated".to_string(),
+                body: "owner/repo#42: Improve all_changes tests - new comment".to_string(),
+            }
+        );
+    }
+
+    #[test]
+    fn notification_message_for_tracked_pr_commit_mentions_new_commits() {
+        let mut pr = build_pull_request(&[TestPrEvent::Ack, TestPrEvent::Commit]);
+        pr.requested_reviewers = vec![not_author()];
+
+        assert_eq!(
+            pr.notification_message(&not_author()),
+            PrNotificationMessage {
+                title: "PR Updated".to_string(),
+                body: "owner/repo#42: Improve all_changes tests - new commits pushed".to_string(),
+            }
+        );
+    }
+
+    #[test]
+    fn notification_message_hides_my_commit_only_changes() {
+        let pr = build_pull_request(&[TestPrEvent::Ack, TestPrEvent::Commit]);
+
+        assert_eq!(
+            pr.notification_message(&author()),
+            PrNotificationMessage {
+                title: "PR Updated".to_string(),
+                body: "owner/repo#42: Improve all_changes tests".to_string(),
+            }
+        );
+    }
+
+    #[test]
+    fn notification_message_combines_multiple_changes() {
+        let mut pr = build_pull_request(&[
+            TestPrEvent::Ack,
+            TestPrEvent::Comment,
+            TestPrEvent::CiStatus,
+            TestPrEvent::ReviewStatus,
+        ]);
+        let activity_at = timestamp(5);
+        pr.last_comment_at = activity_at;
+        pr.last_ci_status_update_at = activity_at;
+        pr.last_review_status_update_at = activity_at;
+        pr.updated_at = activity_at;
+        pr.ci_status = CiStatus::Failure;
+        pr.comments = vec![
+            test_comment(&not_author(), activity_at, false),
+            test_comment(&not_author(), activity_at, true),
+        ];
+
+        assert_eq!(
+            pr.notification_message(&author()),
+            PrNotificationMessage {
+                title: "PR Updated".to_string(),
+                body: "owner/repo#42: Improve all_changes tests - new comment, CI status changed, review status changed".to_string(),
+            }
+        );
     }
 
     #[test]

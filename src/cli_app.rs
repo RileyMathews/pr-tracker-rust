@@ -294,14 +294,11 @@ fn notify_sync_changes(summary: &SyncRunSummary, username: &str) -> anyhow::Resu
                 continue;
             }
 
-            let body = format!(
-                "{}#{} by {} {}",
-                pr.repository, pr.number, pr.author, pr.title
-            );
+            let message = pr.notification_message(username);
 
             notify_rust::Notification::new()
-                .summary("PR Tracker - New PR")
-                .body(&body)
+                .summary(&format!("PR Tracker - {}", message.title))
+                .body(&message.body)
                 .appname("pr-tracker")
                 .show()?;
         }
@@ -311,14 +308,11 @@ fn notify_sync_changes(summary: &SyncRunSummary, username: &str) -> anyhow::Resu
                 continue;
             }
 
-            let body = format!(
-                "{}#{} by {} {}",
-                pr.repository, pr.number, pr.author, pr.title
-            );
+            let message = pr.notification_message(username);
 
             notify_rust::Notification::new()
-                .summary("PR Tracker - Updated PR")
-                .body(&body)
+                .summary(&format!("PR Tracker - {}", message.title))
+                .body(&message.body)
                 .appname("pr-tracker")
                 .show()?;
         }

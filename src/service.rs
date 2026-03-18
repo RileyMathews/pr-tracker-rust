@@ -122,12 +122,100 @@ fn map_ci_status(pr: &graphql::PullRequestNode) -> CiStatus {
         .and_then(|c| c.commit.status_check_rollup.as_ref());
 
     match rollup {
-        Some(r) => match r.state.as_str() {
-            "SUCCESS" => CiStatus::Success,
-            "FAILURE" | "ERROR" => CiStatus::Failure,
-            _ => CiStatus::Pending,
-        },
+        Some(r) => map_rollup_ci_status(r),
         None => CiStatus::Pending,
+    }
+}
+
+fn map_rollup_ci_status(rollup: &graphql::StatusCheckRollup) -> CiStatus {
+    let Some(contexts) = rollup.contexts.as_ref() else {
+        return fallback_rollup_state(&rollup.state);
+    };
+
+    let mut has_required = false;
+    let mut has_required_pending = false;
+
+    for context in &contexts.nodes {
+        match required_context_state(context) {
+            Some(RequiredContextState::Failure) => return CiStatus::Failure,
+            Some(RequiredContextState::Pending) => {
+                has_required = true;
+                has_required_pending = true;
+            }
+            Some(RequiredContextState::Success) => {
+                has_required = true;
+            }
+            None => {}
+        }
+    }
+
+    if !has_required {
+        CiStatus::Success
+    } else if has_required_pending {
+        CiStatus::Pending
+    } else {
+        CiStatus::Success
+    }
+}
+
+fn fallback_rollup_state(state: &str) -> CiStatus {
+    match state {
+        "SUCCESS" => CiStatus::Success,
+        "FAILURE" | "ERROR" => CiStatus::Failure,
+        _ => CiStatus::Pending,
+    }
+}
+
+enum RequiredContextState {
+    Success,
+    Pending,
+    Failure,
+}
+
+fn required_context_state(
+    context: &graphql::StatusCheckRollupContext,
+) -> Option<RequiredContextState> {
+    match context {
+        graphql::StatusCheckRollupContext::CheckRun {
+            status,
+            conclusion,
+            is_required,
+            ..
+        } => {
+            if !is_required {
+                return None;
+            }
+
+            if status != "COMPLETED" {
+                return Some(RequiredContextState::Pending);
+            }
+
+            match conclusion.as_deref() {
+                Some("SUCCESS") | Some("NEUTRAL") | Some("SKIPPED") => {
+                    Some(RequiredContextState::Success)
+                }
+                Some("FAILURE")
+                | Some("TIMED_OUT")
+                | Some("ACTION_REQUIRED")
+                | Some("STARTUP_FAILURE")
+                | Some("CANCELLED")
+                | Some("STALE") => Some(RequiredContextState::Failure),
+                _ => Some(RequiredContextState::Pending),
+            }
+        }
+        graphql::StatusCheckRollupContext::StatusContext {
+            state, is_required, ..
+        } => {
+            if !is_required {
+                return None;
+            }
+
+            match state.as_str() {
+                "SUCCESS" => Some(RequiredContextState::Success),
+                "ERROR" | "FAILURE" => Some(RequiredContextState::Failure),
+                _ => Some(RequiredContextState::Pending),
+            }
+        }
     }
 }
 
@@ -300,7 +388,38 @@ pub async fn fetch_pull_requests_by_number(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::github::graphql::{Author, DiscoveryPullRequestNode};
+    use crate::github::graphql::{
+        Author, DiscoveryPullRequestNode, StatusCheckRollup, StatusCheckRollupContext,
+        StatusCheckRollupContextConnection,
+    };
+
+    fn check_run(
+        is_required: bool,
+        status: &str,
+        conclusion: Option<&str>,
+    ) -> StatusCheckRollupContext {
+        StatusCheckRollupContext::CheckRun {
+            name: "test".to_string(),
+            status: status.to_string(),
+            conclusion: conclusion.map(str::to_string),
+            is_required,
+        }
+    }
+
+    fn status_context(is_required: bool, state: &str) -> StatusCheckRollupContext {
+        StatusCheckRollupContext::StatusContext {
+            context: "legacy".to_string(),
+            state: state.to_string(),
+            is_required,
+        }
+    }
+
+    fn rollup_with_contexts(contexts: Vec<StatusCheckRollupContext>) -> StatusCheckRollup {
+        StatusCheckRollup {
+            state: "PENDING".to_string(),
+            contexts: Some(StatusCheckRollupContextConnection { nodes: contexts }),
+        }
+    }
 
     fn discovery_pr(number: i64, author: Option<&str>) -> DiscoveryPullRequestNode {
         DiscoveryPullRequestNode {
@@ -375,5 +494,56 @@ mod tests {
 
         let result = filter_new_prs(&prs, &authors, &known);
         assert_eq!(result, vec![42]);
+    }
+
+    #[test]
+    fn map_rollup_ci_status_returns_success_when_no_required_checks_exist() {
+        let rollup = rollup_with_contexts(vec![
+            check_run(false, "COMPLETED", Some("FAILURE")),
+            status_context(false, "FAILURE"),
+        ]);
+
+        assert_eq!(map_rollup_ci_status(&rollup), CiStatus::Success);
+    }
+
+    #[test]
+    fn map_rollup_ci_status_returns_failure_for_required_failed_check() {
+        let rollup = rollup_with_contexts(vec![
+            check_run(false, "COMPLETED", Some("FAILURE")),
+            check_run(true, "COMPLETED", Some("FAILURE")),
+        ]);
+
+        assert_eq!(map_rollup_ci_status(&rollup), CiStatus::Failure);
+    }
+
+    #[test]
+    fn map_rollup_ci_status_returns_pending_for_required_in_progress_check() {
+        let rollup = rollup_with_contexts(vec![
+            check_run(true, "IN_PROGRESS", None),
+            check_run(false, "COMPLETED", Some("FAILURE")),
+        ]);
+
+        assert_eq!(map_rollup_ci_status(&rollup), CiStatus::Pending);
+    }
+
+    #[test]
+    fn map_rollup_ci_status_returns_success_for_all_required_successful_checks() {
+        let rollup = rollup_with_contexts(vec![
+            check_run(true, "COMPLETED", Some("SUCCESS")),
+            status_context(true, "SUCCESS"),
+            check_run(false, "COMPLETED", Some("FAILURE")),
+        ]);
+
+        assert_eq!(map_rollup_ci_status(&rollup), CiStatus::Success);
+    }
+
+    #[test]
+    fn map_rollup_ci_status_uses_rollup_state_when_contexts_are_missing() {
+        let rollup = StatusCheckRollup {
+            state: "FAILURE".to_string(),
+            contexts: None,
+        };
+
+        assert_eq!(map_rollup_ci_status(&rollup), CiStatus::Failure);
     }
 }

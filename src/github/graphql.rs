@@ -164,6 +164,31 @@ pub struct CommitDetail {
 #[derive(Debug, Deserialize)]
 pub struct StatusCheckRollup {
     pub state: String,
+    pub contexts: Option<StatusCheckRollupContextConnection>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct StatusCheckRollupContextConnection {
+    #[serde(default)]
+    pub nodes: Vec<StatusCheckRollupContext>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(tag = "__typename")]
+pub enum StatusCheckRollupContext {
+    CheckRun {
+        name: String,
+        status: String,
+        conclusion: Option<String>,
+        #[serde(rename = "isRequired")]
+        is_required: bool,
+    },
+    StatusContext {
+        context: String,
+        state: String,
+        #[serde(rename = "isRequired")]
+        is_required: bool,
+    },
 }
 
 #[derive(Debug, Deserialize)]
@@ -294,11 +319,27 @@ pub fn build_targeted_refresh_query(pr_numbers: &[i64]) -> String {
       commits(last: 1) {{
         nodes {{
           commit {{
-            statusCheckRollup {{
-              state
+              statusCheckRollup {{
+                state
+                contexts(first: 100) {{
+                  nodes {{
+                    __typename
+                    ... on CheckRun {{
+                      name
+                      status
+                      conclusion
+                      isRequired(pullRequestNumber: {number})
+                    }}
+                    ... on StatusContext {{
+                      context
+                      state
+                      isRequired(pullRequestNumber: {number})
+                    }}
+                  }}
+                }}
+              }}
             }}
           }}
-        }}
       }}
       comments(last: 100) {{
         nodes {{
@@ -352,6 +393,8 @@ mod tests {
         assert!(query.contains("pr_42: pullRequest(number: 42)"));
         assert!(query.contains("state"));
         assert!(query.contains("statusCheckRollup"));
+        assert!(query.contains("contexts(first: 100)"));
+        assert!(query.contains("isRequired(pullRequestNumber: 42)"));
         assert!(query.contains("$owner: String!"));
         assert!(query.contains("$name: String!"));
     }

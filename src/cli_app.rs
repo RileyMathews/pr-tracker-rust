@@ -6,7 +6,9 @@ use clap::{Parser, Subcommand};
 use crate::db::DatabaseRepository;
 use crate::github::GitHubClient;
 use crate::models::User;
-use crate::sync::{sync_all_tracked_with_progress, SyncProgress, SyncRunSummary};
+use crate::sync::{
+    format_sync_progress, format_sync_summary, sync_all_tracked_with_progress, SyncProgress,
+};
 
 #[derive(Debug, Parser)]
 #[command(about = "Track pull requests across repositories")]
@@ -255,17 +257,7 @@ async fn handle_sync(repo: &DatabaseRepository) -> anyhow::Result<()> {
     let summary =
         sync_all_tracked_with_progress(repo, &github, &username, log_sync_progress).await?;
 
-    let _ = notify_sync_changes(&summary, &username);
-
-    println!(
-        "Sync complete: repos={} new={} updated_data={} updated_attention={} deleted={} reasons={:?}",
-        summary.synced_repositories,
-        summary.new_prs.len(),
-        summary.updated_data_prs.len(),
-        summary.updated_attention_prs.len(),
-        summary.deleted_prs.len(),
-        summary.updated_reason_counts
-    );
+    println!("{}", format_sync_summary(&summary));
     Ok(())
 }
 
@@ -282,64 +274,8 @@ async fn handle_prs(repo: &DatabaseRepository) -> anyhow::Result<()> {
     Ok(())
 }
 
-fn notify_sync_changes(summary: &SyncRunSummary, username: &str) -> anyhow::Result<()> {
-    if summary.new_prs.is_empty() && summary.updated_attention_prs.is_empty() {
-        return Ok(());
-    }
-
-    #[cfg(target_os = "linux")]
-    {
-        for pr in &summary.new_prs {
-            if !pr.should_notify_on_changes(username) {
-                continue;
-            }
-
-            let message = pr.notification_message(username);
-
-            notify_rust::Notification::new()
-                .summary(&format!("PR Tracker - {}", message.title))
-                .body(&message.body)
-                .appname("pr-tracker")
-                .show()?;
-        }
-
-        for pr in &summary.updated_attention_prs {
-            if !pr.should_notify_on_changes(username) {
-                continue;
-            }
-
-            let message = pr.notification_message(username);
-
-            notify_rust::Notification::new()
-                .summary(&format!("PR Tracker - {}", message.title))
-                .body(&message.body)
-                .appname("pr-tracker")
-                .show()?;
-        }
-    }
-
-    Ok(())
-}
-
 fn log_sync_progress(progress: SyncProgress) {
-    match progress {
-        SyncProgress::FullSyncRepositoryStarted { repository, .. } => {
-            eprintln!("[sync] syncing repository: {repository}");
-        }
-        SyncProgress::FullSyncRepositoryCompleted {
-            repository,
-            new_prs,
-            updated_data_prs,
-            updated_attention_prs,
-            updated_reason_counts,
-            deleted_prs,
-            ..
-        } => {
-            eprintln!(
-                "[sync] repository complete: {repository} new={} updated_data={} updated_attention={} deleted={} reasons={:?}",
-                new_prs, updated_data_prs, updated_attention_prs, deleted_prs, updated_reason_counts
-            );
-        }
-        _ => {}
+    if let Some(line) = format_sync_progress(&progress) {
+        eprintln!("{line}");
     }
 }

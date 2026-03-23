@@ -4,10 +4,8 @@ Rust port of the original Go PR tracker.
 
 ## Binaries
 
-- `cargo run --bin prt` (launches TUI)
+- `cargo run --bin prt` (launches TUI and syncs on startup)
 - `cargo run --bin prt -- <command>` (runs CLI command)
-- `cargo run --bin daemon`
-- `cargo run --bin debug`
 
 ## CLI commands
 
@@ -20,7 +18,6 @@ Rust port of the original Go PR tracker.
 ## Environment
 
 - `PR_TRACKER_DB` (default: `sqlite://./db.sqlite3`)
-- `PR_TRACKER_SYNC_INTERVAL_SECONDS` (daemon only, default: `60`)
 
 ## Nix flake + Home Manager
 
@@ -43,10 +40,6 @@ This repository is a flake that exposes:
         pr-tracker.homeManagerModules.default
         {
           services.pr-tracker-sync.enable = true;
-          # Optional overrides:
-          # services.pr-tracker-sync.syncInterval = "5m";
-          # services.pr-tracker-sync.dataDir = "${config.xdg.dataHome}/pr-tracker-rust";
-          # services.pr-tracker-sync.extraEnvironment = { RUST_LOG = "info"; };
         }
       ];
     };
@@ -57,8 +50,6 @@ This repository is a flake that exposes:
 Enabling `services.pr-tracker-sync` will:
 
 - install the `prt` package in `home.packages`
-- create a user `systemd` service that runs `prt sync`
-- create a user `systemd` timer that triggers every 5 minutes by default
 
 ### Running CLI/TUI after module install
 
@@ -66,18 +57,11 @@ After Home Manager installs the module/package, the binary is available on your 
 
 - `prt`
 
-If you are using the module-managed data directory, point interactive commands at the same DB:
-
-```bash
-export PR_TRACKER_DB="sqlite://${XDG_DATA_HOME:-$HOME/.local/share}/pr-tracker-rust/db.sqlite3"
-```
-
 Then run:
 
 ```bash
 prt auth <github-token>
 prt authors add <login>
 prt repositories add <owner/repo>
-prt sync
 prt
 ```

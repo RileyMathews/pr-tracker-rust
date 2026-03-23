@@ -2,6 +2,8 @@ use crate::models::PullRequest;
 use crate::tui::navigation::{PrPane, ViewMode};
 use crate::tui::state::tui_attention_score;
 
+const MAX_SYNC_LOG_LINES: usize = 256;
+
 /// State for the PR List screen.
 pub struct State {
     /// Which pane is currently focused.
@@ -12,6 +14,8 @@ pub struct State {
     pub mine_cursor: usize,
     /// Current view mode (Active or Acknowledged).
     pub view_mode: ViewMode,
+    /// Recent sync log lines shown while a sync is running.
+    pub sync_logs: Vec<String>,
 }
 
 impl State {
@@ -22,6 +26,19 @@ impl State {
             tracked_cursor: 0,
             mine_cursor: 0,
             view_mode: ViewMode::Active,
+            sync_logs: Vec::new(),
+        }
+    }
+
+    pub fn clear_sync_logs(&mut self) {
+        self.sync_logs.clear();
+    }
+
+    pub fn push_sync_log(&mut self, line: impl Into<String>) {
+        self.sync_logs.push(line.into());
+        if self.sync_logs.len() > MAX_SYNC_LOG_LINES {
+            let overflow = self.sync_logs.len() - MAX_SYNC_LOG_LINES;
+            self.sync_logs.drain(0..overflow);
         }
     }
 
@@ -197,6 +214,25 @@ mod tests {
         let state = State::new();
         assert_eq!(state.tracked_cursor, 0);
         assert_eq!(state.mine_cursor, 0);
+    }
+
+    #[test]
+    fn new_starts_with_empty_sync_logs() {
+        let state = State::new();
+        assert!(state.sync_logs.is_empty());
+    }
+
+    #[test]
+    fn push_sync_log_keeps_recent_entries() {
+        let mut state = State::new();
+
+        for index in 0..300 {
+            state.push_sync_log(format!("line {index}"));
+        }
+
+        assert_eq!(state.sync_logs.len(), 256);
+        assert_eq!(state.sync_logs.first(), Some(&"line 44".to_string()));
+        assert_eq!(state.sync_logs.last(), Some(&"line 299".to_string()));
     }
 
     #[test]

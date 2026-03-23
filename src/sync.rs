@@ -90,6 +90,42 @@ pub enum SyncProgress {
     },
 }
 
+pub fn format_sync_progress(progress: &SyncProgress) -> Option<String> {
+    match progress {
+        SyncProgress::FullSyncStarted { total_repositories } => Some(format!(
+            "[sync] starting sync for {total_repositories} repositor{}",
+            if *total_repositories == 1 { "y" } else { "ies" }
+        )),
+        SyncProgress::FullSyncRepositoryStarted { repository, .. } => {
+            Some(format!("[sync] syncing repository: {repository}"))
+        }
+        SyncProgress::FullSyncRepositoryCompleted {
+            repository,
+            new_prs,
+            updated_data_prs,
+            updated_attention_prs,
+            updated_reason_counts,
+            deleted_prs,
+            ..
+        } => Some(format!(
+            "[sync] repository complete: {repository} new={} updated_data={} updated_attention={} deleted={} reasons={:?}",
+            new_prs, updated_data_prs, updated_attention_prs, deleted_prs, updated_reason_counts
+        )),
+    }
+}
+
+pub fn format_sync_summary(summary: &SyncRunSummary) -> String {
+    format!(
+        "Sync complete: repos={} new={} updated_data={} updated_attention={} deleted={} reasons={:?}",
+        summary.synced_repositories,
+        summary.new_prs.len(),
+        summary.updated_data_prs.len(),
+        summary.updated_attention_prs.len(),
+        summary.deleted_prs.len(),
+        summary.updated_reason_counts
+    )
+}
+
 struct RepoSyncResult {
     repo_name: String,
     repo_index: usize,

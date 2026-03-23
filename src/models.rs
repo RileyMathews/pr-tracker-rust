@@ -89,12 +89,6 @@ pub enum PrPerspective {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct PrNotificationMessage {
-    pub title: String,
-    pub body: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PullRequest {
     pub number: i64,
     pub title: String,
@@ -197,39 +191,6 @@ impl PullRequest {
         self.last_acknowledged_at.is_some() && self.ack_display_changes(current_user).is_empty()
     }
 
-    pub fn should_notify_on_changes(&self, current_user: &str) -> bool {
-        match self.perspective(current_user) {
-            PrPerspective::MyPr => self.should_notify_for_my_pr(current_user),
-            PrPerspective::TrackedPr => self.should_notify_for_tracked_pr(current_user),
-        }
-    }
-
-    fn should_notify_for_my_pr(&self, current_user: &str) -> bool {
-        debug_assert!(matches!(
-            self.perspective(current_user),
-            PrPerspective::MyPr
-        ));
-
-        self.all_changes()
-            .into_iter()
-            .any(Self::notify_change_is_allowed_for_my_pr)
-    }
-
-    fn should_notify_for_tracked_pr(&self, current_user: &str) -> bool {
-        debug_assert!(matches!(
-            self.perspective(current_user),
-            PrPerspective::TrackedPr
-        ));
-
-        if !self.user_is_or_was_involved(current_user) {
-            return false;
-        }
-
-        self.all_changes()
-            .into_iter()
-            .any(Self::notify_change_is_allowed_for_tracked_pr)
-    }
-
     pub fn updates_since_last_ack(&self, current_user: &str) -> String {
         let changes = self.ack_display_changes(current_user);
 
@@ -250,48 +211,6 @@ impl PullRequest {
 
         updates
     }
-
-    pub fn notification_message(&self, current_user: &str) -> PrNotificationMessage {
-        let changes = self.ack_display_changes(current_user);
-
-        if changes.contains(&ChangeKind::NewPullRequest) {
-            return PrNotificationMessage {
-                title: "New PR".to_string(),
-                body: format!(
-                    "{} opened {}#{}: {}",
-                    self.author, self.repository, self.number, self.title
-                ),
-            };
-        }
-
-        if self.perspective(current_user) == PrPerspective::MyPr
-            && changes.contains(&ChangeKind::NewCistatus)
-        {
-            return PrNotificationMessage {
-                title: "Your PR CI has run".to_string(),
-                body: format!(
-                    "Your checks on {}:{} have {}",
-                    self.repository, self.number, self.ci_status
-                ),
-            };
-        }
-
-        let change_summary = summarize_notification_changes(&changes);
-        let body = if change_summary.is_empty() {
-            format!("{}#{}: {}", self.repository, self.number, self.author)
-        } else {
-            format!(
-                "{}#{}: {} - {}",
-                self.repository, self.number, self.author, change_summary
-            )
-        };
-
-        PrNotificationMessage {
-            title: "PR Updated".to_string(),
-            body,
-        }
-    }
-
     pub fn user_is_involved(&self, current_user: &str) -> bool {
         if current_user.is_empty() {
             return false;
@@ -312,24 +231,6 @@ impl PullRequest {
 
     fn commit_changes_are_meaningful_for_user(&self, current_user: &str) -> bool {
         self.user_is_or_was_involved(current_user)
-    }
-
-    fn notify_change_is_allowed_for_my_pr(change: ChangeKind) -> bool {
-        matches!(
-            change,
-            ChangeKind::NewComment | ChangeKind::NewCistatus | ChangeKind::NewReviewStatus
-        )
-    }
-
-    fn notify_change_is_allowed_for_tracked_pr(change: ChangeKind) -> bool {
-        matches!(
-            change,
-            ChangeKind::NewComment
-                | ChangeKind::NewCommit
-                | ChangeKind::NewCistatus
-                | ChangeKind::NewReviewStatus
-                | ChangeKind::NewPullRequest
-        )
     }
 
     fn ci_change_is_meaningful(&self) -> bool {
@@ -368,20 +269,6 @@ impl PullRequest {
 
 fn author_matches_user(author: &str, current_user: &str) -> bool {
     !current_user.is_empty() && author.eq_ignore_ascii_case(current_user)
-}
-
-fn summarize_notification_changes(changes: &[ChangeKind]) -> String {
-    changes
-        .iter()
-        .map(|change| match change {
-            ChangeKind::NewComment => "new comment",
-            ChangeKind::NewCommit => "new commits pushed",
-            ChangeKind::NewCistatus => "CI status changed",
-            ChangeKind::NewReviewStatus => "review status changed",
-            ChangeKind::NewPullRequest => "new PR",
-        })
-        .collect::<Vec<_>>()
-        .join(", ")
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -475,47 +362,6 @@ mod tests {
             is_review_comment,
             review_state: is_review_comment.then(|| "COMMENTED".to_string()),
         }
-    }
-
-    #[test]
-    fn should_notify_returns_false_for_uninvolved_user() {
-        assert!(!build_pull_request(&[]).should_notify_on_changes("foo"));
-    }
-
-    #[test]
-    fn notify_returns_false_for_new_pr_by_user() {
-        let pr = build_pull_request(&[]);
-
-        assert!(!pr.should_notify_on_changes(&author()));
-    }
-
-    #[test]
-    fn notify_returns_false_for_new_pr_by_other_author_when_uninvolved() {
-        let pr = build_pull_request(&[]);
-
-        assert!(!pr.should_notify_on_changes(&not_author()));
-    }
-
-    #[test]
-    fn notify_returns_false_for_commit_on_authors_pr() {
-        let pr = build_pull_request(&[TestPrEvent::Ack, TestPrEvent::Commit]);
-
-        assert!(!pr.should_notify_on_changes(&author()));
-    }
-
-    #[test]
-    fn notify_returns_true_for_commit_on_other_prs() {
-        let mut pr = build_pull_request(&[TestPrEvent::Ack, TestPrEvent::Commit]);
-        pr.requested_reviewers = vec![not_author()];
-
-        assert!(pr.should_notify_on_changes(&not_author()));
-    }
-
-    #[test]
-    fn notify_returns_false_for_commit_on_unrelated_tracked_pr() {
-        let pr = build_pull_request(&[TestPrEvent::Ack, TestPrEvent::Commit]);
-
-        assert!(!pr.should_notify_on_changes("reviewer"));
     }
 
     #[test]
@@ -645,24 +491,6 @@ mod tests {
         pr.ci_status = CiStatus::Pending;
 
         assert!(pr.is_acknowledged_for_user(&not_author()));
-        assert!(!pr.should_notify_on_changes(&not_author()));
-    }
-
-    #[test]
-    fn notify_returns_true_for_pending_ci_change_on_involved_tracked_pr() {
-        let mut pr = build_pull_request(&[TestPrEvent::Ack, TestPrEvent::CiStatus]);
-        pr.ci_status = CiStatus::Pending;
-        pr.requested_reviewers = vec![not_author()];
-
-        assert!(pr.should_notify_on_changes(&not_author()));
-    }
-
-    #[test]
-    fn notify_returns_true_for_commit_on_previously_reviewed_tracked_pr() {
-        let mut pr = build_pull_request(&[TestPrEvent::Ack, TestPrEvent::Commit]);
-        pr.user_has_reviewed = true;
-
-        assert!(pr.should_notify_on_changes("reviewer"));
     }
 
     #[test]

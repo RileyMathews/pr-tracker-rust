@@ -12,12 +12,13 @@ use ratatui::Terminal;
 use tokio::sync::mpsc;
 
 use crate::db::DatabaseRepository;
+use crate::sync::{format_sync_progress, format_sync_summary};
 use crate::tui::authors;
 use crate::tui::navigation::Screen;
 use crate::tui::pr_list;
 use crate::tui::pr_list::events::EventResult;
 use crate::tui::state::SharedState;
-use crate::tui::tasks::{spawn_teams_fetch, BackgroundJob, BackgroundMessage};
+use crate::tui::tasks::{spawn_full_sync, spawn_teams_fetch, BackgroundJob, BackgroundMessage};
 
 /// Application state containing all screen states and shared data.
 pub struct AppState {
@@ -126,22 +127,33 @@ async fn run_tui_inner(
 ) -> anyhow::Result<()> {
     let mut should_quit = false;
     let mut spinner_tick: usize = 0;
-    let mut active_job: Option<BackgroundJob> = None;
+    let mut active_job: Option<BackgroundJob> = Some(BackgroundJob::FullSync);
     let (tx, mut rx) = mpsc::unbounded_channel::<BackgroundMessage>();
+
+    app_state.pr_list.clear_sync_logs();
+    spawn_full_sync(repo.clone(), tx.clone());
 
     while !should_quit {
         // Handle background messages
         while let Ok(message) = rx.try_recv() {
             match message {
-                BackgroundMessage::Progress => {
-                    // Progress updates are handled implicitly by the spinner
+                BackgroundMessage::SyncProgress(progress) => {
+                    if let Some(line) = format_sync_progress(&progress) {
+                        app_state.pr_list.push_sync_log(line);
+                    }
                 }
                 BackgroundMessage::FullSyncFinished(result) => {
                     active_job = None;
                     spinner_tick = 0;
 
-                    // Ignore the sync result for now (original behavior)
-                    let _ = result;
+                    match &result {
+                        Ok(summary) => app_state
+                            .pr_list
+                            .push_sync_log(format_sync_summary(summary)),
+                        Err(err) => app_state
+                            .pr_list
+                            .push_sync_log(format!("[sync] sync failed: {err:#}")),
+                    }
 
                     // Reload PRs from database
                     app_state.shared.prs = repo.get_all_prs().await?;
@@ -230,6 +242,10 @@ async fn run_tui_inner(
                                     ));
                                 }
                             }
+                            EventResult::StartJob(job) => {
+                                active_job = Some(job);
+                                spinner_tick = 0;
+                            }
                             EventResult::Continue => {}
                         }
                     }
@@ -242,6 +258,7 @@ async fn run_tui_inner(
                                 app_state.current_screen = screen;
                             }
                             EventResult::ReviewPr(_) => {}
+                            EventResult::StartJob(_) => {}
                             EventResult::Continue => {}
                         }
                     }

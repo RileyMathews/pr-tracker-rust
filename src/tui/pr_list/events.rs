@@ -19,6 +19,8 @@ pub enum EventResult {
     SwitchScreen(Screen),
     /// Launch PR review for the selected PR.
     ReviewPr(String),
+    /// Start a background job and keep the TUI responsive.
+    StartJob(BackgroundJob),
 }
 
 fn review_pr_url_for_event(
@@ -130,8 +132,9 @@ pub async fn handle_event(
                 return Ok(EventResult::Continue);
             }
 
+            state.clear_sync_logs();
             spawn_full_sync(repo.clone(), tx.clone());
-            Ok(EventResult::Continue)
+            Ok(EventResult::StartJob(BackgroundJob::FullSync))
         }
 
         KeyCode::Char('t') => {

@@ -1,6 +1,6 @@
 use ratatui::layout::{Constraint, Direction, Layout};
 use ratatui::style::{Color, Modifier, Style};
-use ratatui::text::{Line, Span};
+use ratatui::text::{Line, Span, Text};
 use ratatui::widgets::{Block, Borders, HighlightSpacing, List, ListItem, ListState, Paragraph};
 
 use crate::models::PullRequest;
@@ -86,29 +86,33 @@ pub fn draw(
     .block(Block::default().borders(Borders::ALL).title("Overview"));
     frame.render_widget(header, chunks[0]);
 
-    let panes = Layout::default()
-        .direction(Direction::Horizontal)
-        .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
-        .split(chunks[1]);
+    if matches!(active_job, Some(BackgroundJob::FullSync)) {
+        draw_sync_log_viewer(frame, chunks[1], state);
+    } else {
+        let panes = Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
+            .split(chunks[1]);
 
-    draw_pr_pane(
-        frame,
-        panes[0],
-        "Tracked PRs",
-        &tracked_indices,
-        state.cursor_for(PrPane::Tracked),
-        state.focus == PrPane::Tracked,
-        shared,
-    );
-    draw_pr_pane(
-        frame,
-        panes[1],
-        "My PRs",
-        &mine_indices,
-        state.cursor_for(PrPane::Mine),
-        state.focus == PrPane::Mine,
-        shared,
-    );
+        draw_pr_pane(
+            frame,
+            panes[0],
+            "Tracked PRs",
+            &tracked_indices,
+            state.cursor_for(PrPane::Tracked),
+            state.focus == PrPane::Tracked,
+            shared,
+        );
+        draw_pr_pane(
+            frame,
+            panes[1],
+            "My PRs",
+            &mine_indices,
+            state.cursor_for(PrPane::Mine),
+            state.focus == PrPane::Mine,
+            shared,
+        );
+    }
 
     let spinner = match active_job {
         Some(job) => format!(
@@ -120,7 +124,7 @@ pub fn draw(
     };
 
     let footer = Paragraph::new(format!(
-        "tab: switch pane  |  j/k or arrows: move  |  enter/space: open PR  |  ctrl+r: octo review  |  a: acknowledge  |  v: toggle view  |  s: full sync  |  t: authors from teams  |  q: quit{}",
+        "tab: switch pane  |  j/k or arrows: move  |  enter/space: open PR  |  ctrl+r: octo review  |  a: acknowledge  |  v: toggle view  |  s: sync now  |  t: authors from teams  |  q: quit{}",
         spinner
     ))
     .block(Block::default().borders(Borders::TOP));
@@ -169,6 +173,32 @@ fn draw_pr_pane(
         list_state.select(Some(cursor.min(indices.len() - 1)));
     }
     frame.render_stateful_widget(list, area, &mut list_state);
+}
+
+fn draw_sync_log_viewer(
+    frame: &mut ratatui::Frame<'_>,
+    area: ratatui::layout::Rect,
+    state: &State,
+) {
+    let available_lines = area.height.saturating_sub(2) as usize;
+    let start = state.sync_logs.len().saturating_sub(available_lines);
+    let visible_lines: Vec<Line<'_>> = if available_lines == 0 {
+        Vec::new()
+    } else {
+        state.sync_logs[start..]
+            .iter()
+            .map(|line| Line::raw(line.as_str()))
+            .collect()
+    };
+
+    let log_viewer = Paragraph::new(Text::from(visible_lines)).block(
+        Block::default()
+            .title("Sync Log")
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(Color::Cyan)),
+    );
+
+    frame.render_widget(log_viewer, area);
 }
 
 fn build_list_item<'a>(index: usize, pr: &'a PullRequest, username: &str) -> ListItem<'a> {

@@ -41,7 +41,6 @@ cargo test --lib tui::state::tests
 # Run binaries
 cargo run --bin prt              # main entry (TUI with no args, CLI with args)
 cargo run --bin prt -- <command> # CLI mode
-cargo run --bin daemon           # background sync loop
 ```
 
 The `just agent-full-verify` target is an alias for `just verify` — use it as
@@ -76,8 +75,6 @@ src/
 src/bin/
   prt.rs              # main binary — TUI (no args) or CLI (with args)
   cli.rs, tui.rs      # standalone CLI / TUI entry points
-  daemon.rs           # periodic background sync
-  debug.rs            # dev harness
 migrations/           # SQLite migrations (sqlx, 000001–000006)
 ```
 

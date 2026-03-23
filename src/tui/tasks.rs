@@ -2,7 +2,7 @@ use tokio::sync::mpsc;
 
 use crate::db::DatabaseRepository;
 use crate::github::GitHubClient;
-use crate::sync::{sync_all_tracked_with_progress, SyncRunSummary};
+use crate::sync::{sync_all_tracked_with_progress, SyncProgress, SyncRunSummary};
 
 /// Background job types that can be active.
 #[derive(Clone, Copy)]
@@ -13,7 +13,7 @@ pub enum BackgroundJob {
 
 /// Messages sent from background tasks to the main loop.
 pub enum BackgroundMessage {
-    Progress,
+    SyncProgress(SyncProgress),
     FullSyncFinished(anyhow::Result<SyncRunSummary>),
     TeamsFetchFinished(anyhow::Result<TeamsPayload>),
 }
@@ -52,8 +52,8 @@ async fn run_full_sync(
     let username = user.username.clone();
     let github = GitHubClient::new(user.access_token)?;
 
-    sync_all_tracked_with_progress(&repo, &github, &username, |_| {
-        let _ = tx.send(BackgroundMessage::Progress);
+    sync_all_tracked_with_progress(&repo, &github, &username, |progress| {
+        let _ = tx.send(BackgroundMessage::SyncProgress(progress));
     })
     .await
 }

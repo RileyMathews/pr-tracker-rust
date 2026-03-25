@@ -20,10 +20,11 @@ pub fn draw(
     active_job: Option<BackgroundJob>,
     spinner_tick: usize,
 ) {
-    let tracked_indices = state.tracked_indices(&shared.prs, &shared.username);
-    let mine_indices = state.mine_indices(&shared.prs, &shared.username);
-    let selected = state
-        .selected_index_for_focus(&shared.prs, &shared.username)
+    let derived = state.derive(&shared.prs, &shared.username);
+    let tracked = &derived.tracked;
+    let mine = &derived.mine;
+    let selected = derived
+        .selected_index_for_focus()
         .and_then(|index| shared.prs.get(index));
 
     let chunks = Layout::default()
@@ -49,12 +50,12 @@ pub fn draw(
         ),
         Span::raw("  |  "),
         Span::styled(
-            format!("tracked: {}", tracked_indices.len()),
+            format!("tracked: {}", tracked.len()),
             Style::default().fg(Color::White),
         ),
         Span::raw("  |  "),
         Span::styled(
-            format!("mine: {}", mine_indices.len()),
+            format!("mine: {}", mine.len()),
             Style::default().fg(Color::White),
         ),
         Span::raw("  |  "),
@@ -98,8 +99,7 @@ pub fn draw(
             frame,
             panes[0],
             "Tracked PRs",
-            &tracked_indices,
-            state.cursor_for(PrPane::Tracked),
+            tracked,
             state.focus == PrPane::Tracked,
             shared,
         );
@@ -107,8 +107,7 @@ pub fn draw(
             frame,
             panes[1],
             "My PRs",
-            &mine_indices,
-            state.cursor_for(PrPane::Mine),
+            mine,
             state.focus == PrPane::Mine,
             shared,
         );
@@ -135,12 +134,12 @@ fn draw_pr_pane(
     frame: &mut ratatui::Frame<'_>,
     area: ratatui::layout::Rect,
     title: &str,
-    indices: &[usize],
-    cursor: usize,
+    pane: &crate::tui::pr_list::state::PaneView,
     focused: bool,
     shared: &SharedState,
 ) {
-    let items: Vec<ListItem<'_>> = indices
+    let items: Vec<ListItem<'_>> = pane
+        .indices
         .iter()
         .map(|pr_index| &shared.prs[*pr_index])
         .enumerate()
@@ -156,7 +155,7 @@ fn draw_pr_pane(
     let list = List::new(items)
         .block(
             Block::default()
-                .title(format!("{} ({})", title_case(title), indices.len()))
+                .title(format!("{} ({})", title_case(title), pane.len()))
                 .borders(Borders::ALL)
                 .border_style(border_style),
         )
@@ -169,8 +168,8 @@ fn draw_pr_pane(
         .highlight_spacing(HighlightSpacing::Always);
 
     let mut list_state = ListState::default();
-    if focused && !indices.is_empty() {
-        list_state.select(Some(cursor.min(indices.len() - 1)));
+    if focused && pane.selected_index.is_some() {
+        list_state.select(Some(pane.cursor));
     }
     frame.render_stateful_widget(list, area, &mut list_state);
 }

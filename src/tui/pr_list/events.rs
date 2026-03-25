@@ -25,7 +25,7 @@ pub enum EventResult {
 
 fn review_pr_url_for_event(
     key_event: KeyEvent,
-    state: &State,
+    derived: &crate::tui::pr_list::state::DerivedPrList,
     shared: &SharedState,
 ) -> Option<String> {
     if key_event.kind != KeyEventKind::Press {
@@ -38,8 +38,8 @@ fn review_pr_url_for_event(
         return None;
     }
 
-    state
-        .selected_index_for_focus(&shared.prs, &shared.username)
+    derived
+        .selected_index_for_focus()
         .map(|pr_index| shared.prs[pr_index].url())
 }
 
@@ -52,7 +52,9 @@ pub async fn handle_event(
     repo: &DatabaseRepository,
     tx: &mpsc::UnboundedSender<BackgroundMessage>,
 ) -> anyhow::Result<EventResult> {
-    if let Some(pr_url) = review_pr_url_for_event(key_event, state, shared) {
+    let derived = state.derive(&shared.prs, &shared.username);
+
+    if let Some(pr_url) = review_pr_url_for_event(key_event, &derived, shared) {
         return Ok(EventResult::ReviewPr(pr_url));
     }
 
@@ -67,17 +69,13 @@ pub async fn handle_event(
 
         KeyCode::Tab => {
             state.toggle_focus();
-            let tracked_len = state.tracked_indices(&shared.prs, &shared.username).len();
-            let mine_len = state.mine_indices(&shared.prs, &shared.username).len();
-            state.clamp_cursors(tracked_len, mine_len);
+            let derived = state.derive(&shared.prs, &shared.username);
+            state.clamp_to_derived(&derived);
             Ok(EventResult::Continue)
         }
 
         KeyCode::Up | KeyCode::Char('k') => {
-            let filtered_len = state
-                .focused_pane_indices(&shared.prs, &shared.username)
-                .len();
-            state.clamp_cursor(state.focus, filtered_len);
+            state.clamp_to_derived(&derived);
             let cursor = state.cursor_for_mut(state.focus);
             if *cursor > 0 {
                 *cursor -= 1;
@@ -86,10 +84,8 @@ pub async fn handle_event(
         }
 
         KeyCode::Down | KeyCode::Char('j') => {
-            let filtered_len = state
-                .focused_pane_indices(&shared.prs, &shared.username)
-                .len();
-            state.clamp_cursor(state.focus, filtered_len);
+            state.clamp_to_derived(&derived);
+            let filtered_len = derived.focused().len();
             let cursor = state.cursor_for_mut(state.focus);
             if *cursor + 1 < filtered_len {
                 *cursor += 1;
@@ -98,7 +94,7 @@ pub async fn handle_event(
         }
 
         KeyCode::Enter | KeyCode::Char(' ') => {
-            if let Some(pr_index) = state.selected_index_for_focus(&shared.prs, &shared.username) {
+            if let Some(pr_index) = derived.selected_index_for_focus() {
                 let pr = &shared.prs[pr_index];
                 let _ = open::that(pr.url());
             }
@@ -106,24 +102,22 @@ pub async fn handle_event(
         }
 
         KeyCode::Char('a') => {
-            if let Some(pr_index) = state.selected_index_for_focus(&shared.prs, &shared.username) {
+            if let Some(pr_index) = derived.selected_index_for_focus() {
                 let mut pr = shared.prs[pr_index].clone();
                 pr.last_acknowledged_at = Some(Utc::now());
                 repo.save_pr(&pr).await?;
                 shared.prs[pr_index] = pr;
 
-                let tracked_len = state.tracked_indices(&shared.prs, &shared.username).len();
-                let mine_len = state.mine_indices(&shared.prs, &shared.username).len();
-                state.clamp_cursors(tracked_len, mine_len);
+                let derived = state.derive(&shared.prs, &shared.username);
+                state.clamp_to_derived(&derived);
             }
             Ok(EventResult::Continue)
         }
 
         KeyCode::Char('v') => {
             state.toggle_view();
-            let tracked_len = state.tracked_indices(&shared.prs, &shared.username).len();
-            let mine_len = state.mine_indices(&shared.prs, &shared.username).len();
-            state.clamp_cursors(tracked_len, mine_len);
+            let derived = state.derive(&shared.prs, &shared.username);
+            state.clamp_to_derived(&derived);
             Ok(EventResult::Continue)
         }
 
@@ -182,10 +176,11 @@ mod tests {
     fn review_pr_url_for_event_returns_selected_pr_url_for_ctrl_r() {
         let state = State::new();
         let shared = SharedState::new(vec![test_pr(42, "bob")], "alice".to_string());
+        let derived = state.derive(&shared.prs, &shared.username);
         let key_event = KeyEvent::new(KeyCode::Char('r'), KeyModifiers::CONTROL);
 
         assert_eq!(
-            review_pr_url_for_event(key_event, &state, &shared),
+            review_pr_url_for_event(key_event, &derived, &shared),
             Some("https://github.com/owner/repo/pull/42".to_string())
         );
     }
@@ -194,18 +189,20 @@ mod tests {
     fn review_pr_url_for_event_ignores_non_press_events() {
         let state = State::new();
         let shared = SharedState::new(vec![test_pr(42, "bob")], "alice".to_string());
+        let derived = state.derive(&shared.prs, &shared.username);
         let mut key_event = KeyEvent::new(KeyCode::Char('r'), KeyModifiers::CONTROL);
         key_event.kind = KeyEventKind::Release;
 
-        assert_eq!(review_pr_url_for_event(key_event, &state, &shared), None);
+        assert_eq!(review_pr_url_for_event(key_event, &derived, &shared), None);
     }
 
     #[test]
     fn review_pr_url_for_event_returns_none_without_selection() {
         let state = State::new();
         let shared = SharedState::new(vec![], "alice".to_string());
+        let derived = state.derive(&shared.prs, &shared.username);
         let key_event = KeyEvent::new(KeyCode::Char('r'), KeyModifiers::CONTROL);
 
-        assert_eq!(review_pr_url_for_event(key_event, &state, &shared), None);
+        assert_eq!(review_pr_url_for_event(key_event, &derived, &shared), None);
     }
 }

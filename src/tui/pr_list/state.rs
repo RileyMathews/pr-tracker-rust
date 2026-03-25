@@ -4,6 +4,60 @@ use crate::tui::state::tui_attention_score;
 
 const MAX_SYNC_LOG_LINES: usize = 256;
 
+pub struct DerivedPrList {
+    pub tracked: PaneView,
+    pub mine: PaneView,
+    pub focus: PrPane,
+    pub view_mode: ViewMode,
+}
+
+pub struct PaneView {
+    pub indices: Vec<usize>,
+    pub cursor: usize,
+    pub selected_index: Option<usize>,
+}
+
+impl PaneView {
+    fn new(indices: Vec<usize>, raw_cursor: usize) -> Self {
+        let cursor = clamp_cursor(raw_cursor, indices.len());
+        let selected_index = indices.get(cursor).copied();
+        Self {
+            indices,
+            cursor,
+            selected_index,
+        }
+    }
+
+    pub fn len(&self) -> usize {
+        self.indices.len()
+    }
+}
+
+impl DerivedPrList {
+    pub fn pane(&self, pane: PrPane) -> &PaneView {
+        match pane {
+            PrPane::Tracked => &self.tracked,
+            PrPane::Mine => &self.mine,
+        }
+    }
+
+    pub fn focused(&self) -> &PaneView {
+        self.pane(self.focus)
+    }
+
+    pub fn selected_index_for_focus(&self) -> Option<usize> {
+        self.focused().selected_index
+    }
+}
+
+fn clamp_cursor(cursor: usize, len: usize) -> usize {
+    if len == 0 {
+        0
+    } else {
+        cursor.min(len - 1)
+    }
+}
+
 /// State for the PR List screen.
 pub struct State {
     /// Which pane is currently focused.
@@ -80,6 +134,24 @@ impl State {
         indices
     }
 
+    pub fn derive(&self, prs: &[PullRequest], username: &str) -> DerivedPrList {
+        let tracked = PaneView::new(
+            self.pane_indices(prs, username, PrPane::Tracked),
+            self.tracked_cursor,
+        );
+        let mine = PaneView::new(
+            self.pane_indices(prs, username, PrPane::Mine),
+            self.mine_cursor,
+        );
+
+        DerivedPrList {
+            tracked,
+            mine,
+            focus: self.focus,
+            view_mode: self.view_mode,
+        }
+    }
+
     pub fn tracked_indices(&self, prs: &[PullRequest], username: &str) -> Vec<usize> {
         self.pane_indices(prs, username, PrPane::Tracked)
     }
@@ -102,34 +174,18 @@ impl State {
         }
     }
 
-    pub fn selected_index(&self, filtered_indices: &[usize], pane: PrPane) -> Option<usize> {
-        filtered_indices.get(self.cursor_for(pane)).copied()
-    }
-
-    pub fn focused_pane_indices(&self, prs: &[PullRequest], username: &str) -> Vec<usize> {
-        match self.focus {
-            PrPane::Tracked => self.tracked_indices(prs, username),
-            PrPane::Mine => self.mine_indices(prs, username),
-        }
-    }
-
-    pub fn selected_index_for_focus(&self, prs: &[PullRequest], username: &str) -> Option<usize> {
-        let filtered_indices = self.focused_pane_indices(prs, username);
-        self.selected_index(&filtered_indices, self.focus)
-    }
-
     pub fn clamp_cursor(&mut self, pane: PrPane, len: usize) {
-        let cursor = self.cursor_for_mut(pane);
-        if len == 0 {
-            *cursor = 0;
-        } else if *cursor >= len {
-            *cursor = len - 1;
-        }
+        *self.cursor_for_mut(pane) = clamp_cursor(self.cursor_for(pane), len);
     }
 
     pub fn clamp_cursors(&mut self, tracked_len: usize, mine_len: usize) {
         self.clamp_cursor(PrPane::Tracked, tracked_len);
         self.clamp_cursor(PrPane::Mine, mine_len);
+    }
+
+    pub fn clamp_to_derived(&mut self, derived: &DerivedPrList) {
+        self.tracked_cursor = derived.tracked.cursor;
+        self.mine_cursor = derived.mine.cursor;
     }
 
     pub fn toggle_focus(&mut self) {
@@ -304,9 +360,15 @@ mod tests {
     fn selected_index_uses_pane_cursor() {
         let mut state = State::new();
         state.mine_cursor = 1;
-        let filtered = vec![4, 8, 9];
+        let prs = vec![
+            pr_with_author(1, "bob"),
+            pr_with_author(2, "alice"),
+            pr_with_author(3, "alice"),
+        ];
 
-        assert_eq!(state.selected_index(&filtered, PrPane::Mine), Some(8));
+        let derived = state.derive(&prs, "alice");
+
+        assert_eq!(derived.mine.selected_index, Some(2));
     }
 
     #[test]
@@ -315,7 +377,9 @@ mod tests {
         state.focus = PrPane::Mine;
         let prs = vec![pr_with_author(1, "bob"), pr_with_author(2, "alice")];
 
-        assert_eq!(state.selected_index_for_focus(&prs, "alice"), Some(1));
+        let derived = state.derive(&prs, "alice");
+
+        assert_eq!(derived.selected_index_for_focus(), Some(1));
     }
 
     #[test]
@@ -330,5 +394,41 @@ mod tests {
         let prs = vec![pr2, pr1];
 
         assert_eq!(state.tracked_indices(&prs, "alice"), vec![1, 0]);
+    }
+
+    #[test]
+    fn derive_clamps_cursor_to_last_valid_row() {
+        let mut state = State::new();
+        state.tracked_cursor = 10;
+        let prs = vec![pr_with_author(1, "bob"), pr_with_author(2, "carol")];
+
+        let derived = state.derive(&prs, "alice");
+
+        assert_eq!(derived.tracked.cursor, 1);
+        assert_eq!(derived.tracked.selected_index, Some(1));
+    }
+
+    #[test]
+    fn derive_returns_no_selection_for_empty_pane() {
+        let state = State::new();
+        let prs = vec![pr_with_author(1, "alice")];
+
+        let derived = state.derive(&prs, "alice");
+
+        assert_eq!(derived.tracked.len(), 0);
+        assert_eq!(derived.tracked.selected_index, None);
+        assert_eq!(derived.tracked.cursor, 0);
+    }
+
+    #[test]
+    fn clamp_to_derived_updates_stale_cursors() {
+        let mut state = State::new();
+        state.tracked_cursor = 10;
+        let prs = vec![pr_with_author(1, "bob")];
+
+        let derived = state.derive(&prs, "alice");
+        state.clamp_to_derived(&derived);
+
+        assert_eq!(state.tracked_cursor, 0);
     }
 }

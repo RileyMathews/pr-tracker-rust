@@ -240,38 +240,27 @@ async fn sync_single_repo(
     // Step 1: Compute cutoff
     let discovery_cutoff = compute_discovery_cutoff(tracked_repo.last_synced_at, pr_age_cutoff());
 
-    // Step 2: Phase 1 — Discovery
+    // Step 2: Fetch tracked PRs updated since the cutoff.
     let existing_prs = repository.get_prs_by_repository(repo_name).await?;
-    let known_pr_numbers: Vec<i64> = existing_prs.iter().map(|pr| pr.number).collect();
-
-    let (new_pr_numbers, max_updated_at) = service::discover_new_pull_requests(
+    let service::TrackedPullRequestSyncData {
+        open_prs: fresh_prs,
+        all_comments,
+        closed_pr_numbers,
+        max_updated_at,
+    } = service::fetch_tracked_pull_requests_for_sync(
         github,
         repo_name,
         tracked_authors,
-        &known_pr_numbers,
         discovery_cutoff,
+        username,
     )
     .await?;
 
-    // Step 3: Phase 2 — Targeted Refresh
-    // Collect ALL PR numbers to refresh: existing + newly discovered
-    let mut all_pr_numbers = known_pr_numbers;
-    all_pr_numbers.extend(&new_pr_numbers);
-
-    let (fresh_prs, all_comments, closed_pr_numbers) = if all_pr_numbers.is_empty() {
-        (Vec::new(), Vec::new(), Vec::new())
-    } else {
-        service::fetch_pull_requests_by_number(github, repo_name, &all_pr_numbers, username).await?
-    };
-
-    // Step 4: Diff & persist
-    // Use process_pull_request_sync_results for open PRs (same as before)
-    // Pass ALL existing PRs — no cutoff filtering needed anymore since
-    // closed PR detection is explicit via the state field in Phase 2
+    // Step 3: Diff & persist.
     let SyncDiff {
         new_prs,
         updated_prs,
-        removed_prs: _, // We handle removals via closed_pr_numbers instead
+        removed_prs: _,
     } = process_pull_request_sync_results(&existing_prs, &fresh_prs, Utc::now());
 
     let updated_reason_counts = count_update_reasons(&updated_prs);
@@ -284,31 +273,25 @@ async fn sync_single_repo(
         repository.save_pr(pr).await?;
     }
 
-    // Delete closed/merged/deleted PRs explicitly
+    // Delete closed/merged PRs reported by GitHub search.
     for pr_number in &closed_pr_numbers {
         repository.delete_pr(repo_name, *pr_number).await?;
     }
 
-    // Persist comments for all fetched PRs
+    // Persist comments for all open PRs returned by the search query.
     for comment in all_comments {
         repository.save_comment(&comment).await?;
     }
 
-    // Step 5: Update last_synced_at
-    // Store the GitHub-side timestamp watermark (not local clock)
+    // Step 4: Update last_synced_at using the GitHub-side watermark.
     if let Some(max_ts) = max_updated_at {
-        // Subtract 1 second to create a small overlap window, ensuring PRs
-        // updated at exactly the watermark timestamp are re-scanned next time.
-        // These PRs will already be in our DB from this sync, so the overlap
-        // just causes them to appear in discovery (where they'll be filtered
-        // out as known PRs).
         let watermark = max_ts - chrono::Duration::seconds(1);
         repository
             .update_tracked_repository_last_synced_at(repo_name, watermark)
             .await?;
     }
 
-    // Step 6: Build result
+    // Step 5: Build result.
     let closed_set: HashSet<i64> = closed_pr_numbers.iter().copied().collect();
     let deleted_prs: Vec<PullRequest> = existing_prs
         .into_iter()

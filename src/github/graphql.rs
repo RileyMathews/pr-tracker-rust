@@ -1,19 +1,20 @@
 use serde::Deserialize;
 
-pub const OPEN_PULL_REQUESTS_QUERY: &str = r#"
-query($owner: String!, $name: String!, $cursor: String) {
-  repository(owner: $owner, name: $name) {
-    pullRequests(states: [OPEN], first: 100, after: $cursor, orderBy: {field: UPDATED_AT, direction: DESC}) {
-      pageInfo {
-        hasNextPage
-        endCursor
-      }
-      nodes {
+pub const TRACKED_PULL_REQUESTS_SEARCH_QUERY: &str = r#"
+query($query: String!, $cursor: String) {
+  search(query: $query, type: ISSUE, first: 100, after: $cursor) {
+    pageInfo {
+      hasNextPage
+      endCursor
+    }
+    nodes {
+      ... on PullRequest {
         number
         title
         isDraft
         createdAt
         updatedAt
+        state
         headRefOid
         author {
           login
@@ -72,18 +73,12 @@ query($owner: String!, $name: String!, $cursor: String) {
 "#;
 
 #[derive(Debug, Deserialize)]
-pub struct QueryResponse {
-    pub repository: Option<Repository>,
+pub struct TrackedPullRequestSearchResponse {
+    pub search: TrackedPullRequestSearchResult,
 }
 
 #[derive(Debug, Deserialize)]
-pub struct Repository {
-    #[serde(rename = "pullRequests")]
-    pub pull_requests: PullRequestConnection,
-}
-
-#[derive(Debug, Deserialize)]
-pub struct PullRequestConnection {
+pub struct TrackedPullRequestSearchResult {
     #[serde(rename = "pageInfo")]
     pub page_info: PageInfo,
     #[serde(default)]
@@ -108,8 +103,7 @@ pub struct PullRequestNode {
     pub created_at: String,
     #[serde(rename = "updatedAt")]
     pub updated_at: String,
-    #[serde(default)]
-    pub state: Option<String>,
+    pub state: String,
     pub author: Option<Author>,
     #[serde(rename = "reviewRequests")]
     pub review_requests: ReviewRequestConnection,
@@ -164,31 +158,6 @@ pub struct CommitDetail {
 #[derive(Debug, Deserialize)]
 pub struct StatusCheckRollup {
     pub state: String,
-    pub contexts: Option<StatusCheckRollupContextConnection>,
-}
-
-#[derive(Debug, Deserialize)]
-pub struct StatusCheckRollupContextConnection {
-    #[serde(default)]
-    pub nodes: Vec<StatusCheckRollupContext>,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(tag = "__typename")]
-pub enum StatusCheckRollupContext {
-    CheckRun {
-        name: String,
-        status: String,
-        conclusion: Option<String>,
-        #[serde(rename = "isRequired")]
-        is_required: bool,
-    },
-    StatusContext {
-        context: String,
-        state: String,
-        #[serde(rename = "isRequired")]
-        is_required: bool,
-    },
 }
 
 #[derive(Debug, Deserialize)]
@@ -242,145 +211,21 @@ pub struct LatestReviewNode {
     pub author: Option<Author>,
 }
 
-pub const DISCOVERY_PULL_REQUESTS_QUERY: &str = r#"
-query($owner: String!, $name: String!, $cursor: String) {
-  repository(owner: $owner, name: $name) {
-    pullRequests(states: [OPEN], first: 100, after: $cursor, orderBy: {field: UPDATED_AT, direction: DESC}) {
-      pageInfo {
-        hasNextPage
-        endCursor
-      }
-      nodes {
-        number
-        updatedAt
-        author {
-          login
-        }
-      }
-    }
-  }
-}
-"#;
+pub fn build_tracked_pull_requests_search_query(
+    repo_name: &str,
+    authors: &[String],
+    updated_after: Option<&str>,
+) -> String {
+    let mut terms = vec![format!("repo:{repo_name}"), "is:pr".to_string()];
 
-#[derive(Debug, Deserialize)]
-pub struct DiscoveryQueryResponse {
-    pub repository: Option<DiscoveryRepository>,
-}
-
-#[derive(Debug, Deserialize)]
-pub struct DiscoveryRepository {
-    #[serde(rename = "pullRequests")]
-    pub pull_requests: DiscoveryPullRequestConnection,
-}
-
-#[derive(Debug, Deserialize)]
-pub struct DiscoveryPullRequestConnection {
-    #[serde(rename = "pageInfo")]
-    pub page_info: PageInfo,
-    #[serde(default)]
-    pub nodes: Vec<DiscoveryPullRequestNode>,
-}
-
-#[derive(Debug, Deserialize)]
-pub struct DiscoveryPullRequestNode {
-    pub number: i64,
-    #[serde(rename = "updatedAt")]
-    pub updated_at: String,
-    pub author: Option<Author>,
-}
-
-pub fn build_targeted_refresh_query(pr_numbers: &[i64]) -> String {
-    let mut fields = String::new();
-    for &number in pr_numbers.iter().filter(|&&n| n > 0) {
-        use std::fmt::Write;
-        write!(
-            fields,
-            r#"
-    pr_{number}: pullRequest(number: {number}) {{
-      number
-      title
-      isDraft
-      createdAt
-      updatedAt
-      headRefOid
-      state
-      author {{
-        login
-      }}
-      reviewRequests(first: 100) {{
-        nodes {{
-          requestedReviewer {{
-            ... on User {{
-              login
-            }}
-          }}
-        }}
-      }}
-      commits(last: 1) {{
-        nodes {{
-          commit {{
-              statusCheckRollup {{
-                state
-                contexts(first: 100) {{
-                  nodes {{
-                    __typename
-                    ... on CheckRun {{
-                      name
-                      status
-                      conclusion
-                      isRequired(pullRequestNumber: {number})
-                    }}
-                    ... on StatusContext {{
-                      context
-                      state
-                      isRequired(pullRequestNumber: {number})
-                    }}
-                  }}
-                }}
-              }}
-            }}
-          }}
-      }}
-      comments(last: 100) {{
-        nodes {{
-          id
-          author {{ login }}
-          body
-          createdAt
-          updatedAt
-        }}
-      }}
-      reviews(last: 100) {{
-        nodes {{
-          id
-          author {{ login }}
-          body
-          createdAt
-          updatedAt
-          state
-          submittedAt
-        }}
-      }}
-      latestReviews(first: 100) {{
-        nodes {{
-          state
-          submittedAt
-          author {{
-            login
-          }}
-        }}
-      }}
-    }}"#,
-        )
-        .unwrap();
+    if let Some(updated_after) = updated_after {
+        terms.push(format!("updated:>={updated_after}"));
     }
 
-    format!(
-        r#"query($owner: String!, $name: String!) {{
-  repository(owner: $owner, name: $name) {{{fields}
-  }}
-}}"#
-    )
+    terms.extend(authors.iter().map(|author| format!("author:{author}")));
+    terms.push("sort:updated-desc".to_string());
+
+    terms.join(" ")
 }
 
 #[cfg(test)]
@@ -388,38 +233,29 @@ mod tests {
     use super::*;
 
     #[test]
-    fn build_targeted_refresh_query_single_pr() {
-        let query = build_targeted_refresh_query(&[42]);
-        assert!(query.contains("pr_42: pullRequest(number: 42)"));
-        assert!(query.contains("state"));
-        assert!(query.contains("statusCheckRollup"));
-        assert!(query.contains("contexts(first: 100)"));
-        assert!(query.contains("isRequired(pullRequestNumber: 42)"));
-        assert!(query.contains("$owner: String!"));
-        assert!(query.contains("$name: String!"));
+    fn build_tracked_pull_requests_search_query_includes_repo_authors_and_sort() {
+        let query = build_tracked_pull_requests_search_query(
+            "owner/repo",
+            &["alice".to_string(), "bob".to_string()],
+            None,
+        );
+
+        assert!(query.contains("repo:owner/repo"));
+        assert!(query.contains("is:pr"));
+        assert!(!query.contains("is:open"));
+        assert!(query.contains("author:alice"));
+        assert!(query.contains("author:bob"));
+        assert!(query.contains("sort:updated-desc"));
     }
 
     #[test]
-    fn build_targeted_refresh_query_multiple_prs() {
-        let query = build_targeted_refresh_query(&[1, 2, 3]);
-        assert!(query.contains("pr_1: pullRequest(number: 1)"));
-        assert!(query.contains("pr_2: pullRequest(number: 2)"));
-        assert!(query.contains("pr_3: pullRequest(number: 3)"));
-    }
+    fn build_tracked_pull_requests_search_query_includes_cutoff_when_present() {
+        let query = build_tracked_pull_requests_search_query(
+            "owner/repo",
+            &["alice".to_string()],
+            Some("2026-03-25T01:55:42Z"),
+        );
 
-    #[test]
-    fn build_targeted_refresh_query_empty() {
-        let query = build_targeted_refresh_query(&[]);
-        // Should still be a valid query structure, just with no PR fields
-        assert!(query.contains("repository(owner: $owner, name: $name)"));
-        assert!(!query.contains("pullRequest"));
-    }
-
-    #[test]
-    fn build_targeted_refresh_query_filters_non_positive() {
-        let query = build_targeted_refresh_query(&[-1, 0, 5]);
-        assert!(!query.contains("pr_-1"));
-        assert!(!query.contains("pr_0"));
-        assert!(query.contains("pr_5: pullRequest(number: 5)"));
+        assert!(query.contains("updated:>=2026-03-25T01:55:42Z"));
     }
 }

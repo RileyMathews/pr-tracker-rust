@@ -1,64 +1,61 @@
-use std::collections::HashSet;
-
 use chrono::{DateTime, Utc};
 
 use crate::github::graphql;
 use crate::github::GitHubClient;
 use crate::models::{ApprovalStatus, CiStatus, PrComment, PullRequest};
 
-pub async fn fetch_tracked_pull_requests(
+pub struct TrackedPullRequestSyncData {
+    pub open_prs: Vec<PullRequest>,
+    pub all_comments: Vec<PrComment>,
+    pub closed_pr_numbers: Vec<i64>,
+    pub max_updated_at: Option<DateTime<Utc>>,
+}
+
+pub async fn fetch_tracked_pull_requests_for_sync(
     github: &GitHubClient,
     repo_name: &str,
     authors_to_track: &[String],
     updated_after: Option<DateTime<Utc>>,
     username: &str,
-) -> anyhow::Result<(Vec<PullRequest>, Vec<PrComment>)> {
+) -> anyhow::Result<TrackedPullRequestSyncData> {
     let prs = github
-        .fetch_open_pull_requests_graphql(repo_name, updated_after)
+        .fetch_tracked_pull_requests_search(repo_name, authors_to_track, updated_after)
         .await?;
 
-    let mut pull_requests = Vec::new();
-    let mut all_comments = Vec::new();
-
-    for pr in &prs {
-        let author = pr
-            .author
-            .as_ref()
-            .map(|a| a.login.clone())
-            .unwrap_or_default();
-
-        if !authors_to_track.iter().any(|tracked| tracked == &author) {
-            continue;
-        }
-
-        let pr_model = graphql_pr_to_model(repo_name, pr, username)?;
-        all_comments.extend(pr_model.comments.clone());
-        pull_requests.push(pr_model);
-    }
-
-    Ok((pull_requests, all_comments))
+    process_tracked_pull_request_nodes(repo_name, &prs, username)
 }
 
-pub async fn discover_new_pull_requests(
-    github: &GitHubClient,
+fn process_tracked_pull_request_nodes(
     repo_name: &str,
-    authors_to_track: &[String],
-    known_pr_numbers: &[i64],
-    updated_after: Option<DateTime<Utc>>,
-) -> anyhow::Result<(Vec<i64>, Option<DateTime<Utc>>)> {
-    let prs = github
-        .fetch_discovery_pull_requests_graphql(repo_name, updated_after)
-        .await?;
+    prs: &[graphql::PullRequestNode],
+    username: &str,
+) -> anyhow::Result<TrackedPullRequestSyncData> {
+    let mut open_prs = Vec::new();
+    let mut all_comments = Vec::new();
+    let mut closed_pr_numbers = Vec::new();
+    let mut max_updated_at = None;
 
-    let max_updated_at = prs
-        .iter()
-        .filter_map(|pr| parse_github_timestamp(&pr.updated_at).ok())
-        .max();
+    for pr in prs {
+        let updated_at = parse_github_timestamp(&pr.updated_at)?;
+        max_updated_at = Some(
+            max_updated_at.map_or(updated_at, |current: DateTime<Utc>| current.max(updated_at)),
+        );
 
-    let known: HashSet<i64> = known_pr_numbers.iter().copied().collect();
-    let new_pr_numbers = filter_new_prs(&prs, authors_to_track, &known);
+        if pr.state == "OPEN" {
+            let pr_model = graphql_pr_to_model(repo_name, pr, username)?;
+            all_comments.extend(pr_model.comments.clone());
+            open_prs.push(pr_model);
+        } else {
+            closed_pr_numbers.push(pr.number);
+        }
+    }
 
-    Ok((new_pr_numbers, max_updated_at))
+    Ok(TrackedPullRequestSyncData {
+        open_prs,
+        all_comments,
+        closed_pr_numbers,
+        max_updated_at,
+    })
 }
 
 fn graphql_pr_to_model(
@@ -86,7 +83,7 @@ fn graphql_pr_to_model(
 
     let comments = map_comments_from_pr(repo_name, pr);
 
-    let pr_model = PullRequest {
+    Ok(PullRequest {
         number: pr.number,
         title: pr.title.clone(),
         repository: repo_name.to_string(),
@@ -109,9 +106,7 @@ fn graphql_pr_to_model(
         requested_reviewers,
         user_has_reviewed,
         comments,
-    };
-
-    Ok(pr_model)
+    })
 }
 
 fn map_ci_status(pr: &graphql::PullRequestNode) -> CiStatus {
@@ -121,101 +116,14 @@ fn map_ci_status(pr: &graphql::PullRequestNode) -> CiStatus {
         .first()
         .and_then(|c| c.commit.status_check_rollup.as_ref());
 
-    match rollup {
-        Some(r) => map_rollup_ci_status(r),
-        None => CiStatus::Pending,
-    }
+    rollup.map_or(CiStatus::Pending, map_rollup_ci_status)
 }
 
 fn map_rollup_ci_status(rollup: &graphql::StatusCheckRollup) -> CiStatus {
-    let Some(contexts) = rollup.contexts.as_ref() else {
-        return fallback_rollup_state(&rollup.state);
-    };
-
-    let mut has_required = false;
-    let mut has_required_pending = false;
-
-    for context in &contexts.nodes {
-        match required_context_state(context) {
-            Some(RequiredContextState::Failure) => return CiStatus::Failure,
-            Some(RequiredContextState::Pending) => {
-                has_required = true;
-                has_required_pending = true;
-            }
-            Some(RequiredContextState::Success) => {
-                has_required = true;
-            }
-            None => {}
-        }
-    }
-
-    if !has_required {
-        CiStatus::Success
-    } else if has_required_pending {
-        CiStatus::Pending
-    } else {
-        CiStatus::Success
-    }
-}
-
-fn fallback_rollup_state(state: &str) -> CiStatus {
-    match state {
+    match rollup.state.as_str() {
         "SUCCESS" => CiStatus::Success,
         "FAILURE" | "ERROR" => CiStatus::Failure,
         _ => CiStatus::Pending,
-    }
-}
-
-enum RequiredContextState {
-    Success,
-    Pending,
-    Failure,
-}
-
-fn required_context_state(
-    context: &graphql::StatusCheckRollupContext,
-) -> Option<RequiredContextState> {
-    match context {
-        graphql::StatusCheckRollupContext::CheckRun {
-            status,
-            conclusion,
-            is_required,
-            ..
-        } => {
-            if !is_required {
-                return None;
-            }
-
-            if status != "COMPLETED" {
-                return Some(RequiredContextState::Pending);
-            }
-
-            match conclusion.as_deref() {
-                Some("SUCCESS") | Some("NEUTRAL") | Some("SKIPPED") => {
-                    Some(RequiredContextState::Success)
-                }
-                Some("FAILURE")
-                | Some("TIMED_OUT")
-                | Some("ACTION_REQUIRED")
-                | Some("STARTUP_FAILURE")
-                | Some("CANCELLED")
-                | Some("STALE") => Some(RequiredContextState::Failure),
-                _ => Some(RequiredContextState::Pending),
-            }
-        }
-        graphql::StatusCheckRollupContext::StatusContext {
-            state, is_required, ..
-        } => {
-            if !is_required {
-                return None;
-            }
-
-            match state.as_str() {
-                "SUCCESS" => Some(RequiredContextState::Success),
-                "ERROR" | "FAILURE" => Some(RequiredContextState::Failure),
-                _ => Some(RequiredContextState::Pending),
-            }
-        }
     }
 }
 
@@ -266,7 +174,6 @@ fn latest_comment_time(pr: &graphql::PullRequestNode) -> DateTime<Utc> {
 fn map_comments_from_pr(repo_name: &str, pr: &graphql::PullRequestNode) -> Vec<PrComment> {
     let mut comments = Vec::new();
 
-    // Extract issue comments from pr.comments.nodes
     for comment in &pr.comments.nodes {
         let author = comment
             .author
@@ -292,7 +199,6 @@ fn map_comments_from_pr(repo_name: &str, pr: &graphql::PullRequestNode) -> Vec<P
         });
     }
 
-    // Extract review comments from pr.reviews.nodes
     for review in &pr.reviews.nodes {
         let author = review
             .author
@@ -331,219 +237,182 @@ fn parse_optional_timestamp(value: Option<&str>) -> Option<DateTime<Utc>> {
     value.and_then(|raw| parse_github_timestamp(raw).ok())
 }
 
-fn filter_new_prs(
-    prs: &[graphql::DiscoveryPullRequestNode],
-    authors_to_track: &[String],
-    known_pr_numbers: &HashSet<i64>,
-) -> Vec<i64> {
-    let tracked_authors: HashSet<String> = authors_to_track
-        .iter()
-        .map(|author| author.to_ascii_lowercase())
-        .collect();
-
-    prs.iter()
-        .filter(|pr| {
-            let author = pr
-                .author
-                .as_ref()
-                .map(|a| a.login.to_ascii_lowercase())
-                .unwrap_or_default();
-
-            tracked_authors.contains(&author) && !known_pr_numbers.contains(&pr.number)
-        })
-        .map(|pr| pr.number)
-        .collect()
-}
-
-pub async fn fetch_pull_requests_by_number(
-    github: &GitHubClient,
-    repo_name: &str,
-    pr_numbers: &[i64],
-    username: &str,
-) -> anyhow::Result<(Vec<PullRequest>, Vec<PrComment>, Vec<i64>)> {
-    let results = github
-        .fetch_pull_requests_by_number(repo_name, pr_numbers)
-        .await?;
-
-    let mut open_prs = Vec::new();
-    let mut all_comments = Vec::new();
-    let mut closed_pr_numbers = Vec::new();
-
-    for (number, maybe_node) in results {
-        match maybe_node {
-            Some(ref node) if node.state.as_deref() == Some("OPEN") => {
-                let pr_model = graphql_pr_to_model(repo_name, node, username)?;
-                all_comments.extend(pr_model.comments.clone());
-                open_prs.push(pr_model);
-            }
-            _ => {
-                closed_pr_numbers.push(number);
-            }
-        }
-    }
-
-    Ok((open_prs, all_comments, closed_pr_numbers))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::github::graphql::{
-        Author, DiscoveryPullRequestNode, StatusCheckRollup, StatusCheckRollupContext,
-        StatusCheckRollupContextConnection,
+        Author, CommentConnection, CommentNode, CommitConnection, CommitDetail, CommitNode,
+        LatestReviewConnection, LatestReviewNode, PullRequestNode, RequestedReviewer,
+        ReviewConnection, ReviewNode, ReviewRequestConnection, ReviewRequestNode,
+        StatusCheckRollup,
     };
 
-    fn check_run(
-        is_required: bool,
-        status: &str,
-        conclusion: Option<&str>,
-    ) -> StatusCheckRollupContext {
-        StatusCheckRollupContext::CheckRun {
-            name: "test".to_string(),
-            status: status.to_string(),
-            conclusion: conclusion.map(str::to_string),
-            is_required,
-        }
-    }
-
-    fn status_context(is_required: bool, state: &str) -> StatusCheckRollupContext {
-        StatusCheckRollupContext::StatusContext {
-            context: "legacy".to_string(),
-            state: state.to_string(),
-            is_required,
-        }
-    }
-
-    fn rollup_with_contexts(contexts: Vec<StatusCheckRollupContext>) -> StatusCheckRollup {
-        StatusCheckRollup {
-            state: "PENDING".to_string(),
-            contexts: Some(StatusCheckRollupContextConnection { nodes: contexts }),
-        }
-    }
-
-    fn discovery_pr(number: i64, author: Option<&str>) -> DiscoveryPullRequestNode {
-        DiscoveryPullRequestNode {
+    fn test_pr(
+        number: i64,
+        state: &str,
+        updated_at: &str,
+        ci_state: Option<&str>,
+    ) -> PullRequestNode {
+        PullRequestNode {
             number,
-            updated_at: "2025-06-15T00:00:00Z".to_string(),
-            author: author.map(|login| Author {
-                login: login.to_string(),
+            title: format!("PR {number}"),
+            is_draft: false,
+            created_at: "2025-06-15T00:00:00Z".to_string(),
+            updated_at: updated_at.to_string(),
+            state: state.to_string(),
+            author: Some(Author {
+                login: "alice".to_string(),
             }),
+            review_requests: ReviewRequestConnection { nodes: vec![] },
+            head_ref_oid: "abc123".to_string(),
+            commits: CommitConnection {
+                nodes: vec![CommitNode {
+                    commit: CommitDetail {
+                        status_check_rollup: ci_state.map(|state| StatusCheckRollup {
+                            state: state.to_string(),
+                        }),
+                    },
+                }],
+            },
+            comments: CommentConnection { nodes: vec![] },
+            reviews: ReviewConnection { nodes: vec![] },
+            latest_reviews: LatestReviewConnection { nodes: vec![] },
         }
     }
 
-    #[test]
-    fn filter_new_prs_includes_tracked_author_unknown_pr() {
-        let prs = vec![discovery_pr(42, Some("alice"))];
-        let authors = vec!["alice".to_string()];
-        let known = HashSet::new();
-
-        let result = filter_new_prs(&prs, &authors, &known);
-        assert_eq!(result, vec![42]);
+    fn test_pr_with_reviews(review_states: &[&str]) -> PullRequestNode {
+        let mut pr = test_pr(42, "OPEN", "2025-06-15T00:00:00Z", Some("SUCCESS"));
+        pr.latest_reviews = LatestReviewConnection {
+            nodes: review_states
+                .iter()
+                .enumerate()
+                .map(|(index, state)| LatestReviewNode {
+                    state: (*state).to_string(),
+                    submitted_at: Some(format!("2025-06-15T00:00:0{}Z", index + 1)),
+                    author: Some(Author {
+                        login: "reviewer".to_string(),
+                    }),
+                })
+                .collect(),
+        };
+        pr
     }
 
     #[test]
-    fn filter_new_prs_excludes_untracked_author() {
-        let prs = vec![discovery_pr(42, Some("bob"))];
-        let authors = vec!["alice".to_string()];
-        let known = HashSet::new();
-
-        let result = filter_new_prs(&prs, &authors, &known);
-        assert!(result.is_empty());
-    }
-
-    #[test]
-    fn filter_new_prs_excludes_known_pr() {
-        let prs = vec![discovery_pr(42, Some("alice"))];
-        let authors = vec!["alice".to_string()];
-        let known: HashSet<i64> = [42].into_iter().collect();
-
-        let result = filter_new_prs(&prs, &authors, &known);
-        assert!(result.is_empty());
-    }
-
-    #[test]
-    fn filter_new_prs_excludes_pr_with_no_author() {
-        let prs = vec![discovery_pr(42, None)];
-        let authors = vec!["alice".to_string()];
-        let known = HashSet::new();
-
-        let result = filter_new_prs(&prs, &authors, &known);
-        assert!(result.is_empty());
-    }
-
-    #[test]
-    fn filter_new_prs_mixed() {
-        let prs = vec![
-            discovery_pr(1, Some("alice")), // tracked, new
-            discovery_pr(2, Some("bob")),   // untracked
-            discovery_pr(3, Some("alice")), // tracked, but known
-            discovery_pr(4, Some("carol")), // tracked, new
-        ];
-        let authors = vec!["alice".to_string(), "carol".to_string()];
-        let known: HashSet<i64> = [3].into_iter().collect();
-
-        let result = filter_new_prs(&prs, &authors, &known);
-        assert_eq!(result, vec![1, 4]);
-    }
-
-    #[test]
-    fn filter_new_prs_matches_authors_case_insensitively() {
-        let prs = vec![discovery_pr(42, Some("Alice"))];
-        let authors = vec!["alice".to_string()];
-        let known = HashSet::new();
-
-        let result = filter_new_prs(&prs, &authors, &known);
-        assert_eq!(result, vec![42]);
-    }
-
-    #[test]
-    fn map_rollup_ci_status_returns_success_when_no_required_checks_exist() {
-        let rollup = rollup_with_contexts(vec![
-            check_run(false, "COMPLETED", Some("FAILURE")),
-            status_context(false, "FAILURE"),
-        ]);
+    fn map_rollup_ci_status_maps_success() {
+        let rollup = StatusCheckRollup {
+            state: "SUCCESS".to_string(),
+        };
 
         assert_eq!(map_rollup_ci_status(&rollup), CiStatus::Success);
     }
 
     #[test]
-    fn map_rollup_ci_status_returns_failure_for_required_failed_check() {
-        let rollup = rollup_with_contexts(vec![
-            check_run(false, "COMPLETED", Some("FAILURE")),
-            check_run(true, "COMPLETED", Some("FAILURE")),
-        ]);
+    fn map_rollup_ci_status_maps_failure() {
+        let rollup = StatusCheckRollup {
+            state: "FAILURE".to_string(),
+        };
 
         assert_eq!(map_rollup_ci_status(&rollup), CiStatus::Failure);
     }
 
     #[test]
-    fn map_rollup_ci_status_returns_pending_for_required_in_progress_check() {
-        let rollup = rollup_with_contexts(vec![
-            check_run(true, "IN_PROGRESS", None),
-            check_run(false, "COMPLETED", Some("FAILURE")),
-        ]);
+    fn map_rollup_ci_status_maps_pending_for_other_states() {
+        let rollup = StatusCheckRollup {
+            state: "PENDING".to_string(),
+        };
 
         assert_eq!(map_rollup_ci_status(&rollup), CiStatus::Pending);
     }
 
     #[test]
-    fn map_rollup_ci_status_returns_success_for_all_required_successful_checks() {
-        let rollup = rollup_with_contexts(vec![
-            check_run(true, "COMPLETED", Some("SUCCESS")),
-            status_context(true, "SUCCESS"),
-            check_run(false, "COMPLETED", Some("FAILURE")),
-        ]);
+    fn process_tracked_pull_request_nodes_splits_open_and_closed() {
+        let prs = vec![
+            test_pr(1, "OPEN", "2025-06-15T00:00:00Z", Some("SUCCESS")),
+            test_pr(2, "MERGED", "2025-06-16T00:00:00Z", Some("FAILURE")),
+            test_pr(3, "CLOSED", "2025-06-14T00:00:00Z", None),
+        ];
 
-        assert_eq!(map_rollup_ci_status(&rollup), CiStatus::Success);
+        let result = process_tracked_pull_request_nodes("owner/repo", &prs, "alice")
+            .expect("processing succeeds");
+
+        assert_eq!(result.open_prs.len(), 1);
+        assert_eq!(result.open_prs[0].number, 1);
+        assert_eq!(result.closed_pr_numbers, vec![2, 3]);
+        assert_eq!(
+            result.max_updated_at,
+            parse_github_timestamp("2025-06-16T00:00:00Z").ok()
+        );
     }
 
     #[test]
-    fn map_rollup_ci_status_uses_rollup_state_when_contexts_are_missing() {
-        let rollup = StatusCheckRollup {
-            state: "FAILURE".to_string(),
-            contexts: None,
+    fn process_tracked_pull_request_nodes_collects_comments() {
+        let mut pr = test_pr(1, "OPEN", "2025-06-15T00:00:00Z", Some("SUCCESS"));
+        pr.comments = CommentConnection {
+            nodes: vec![CommentNode {
+                id: "comment-1".to_string(),
+                author: Some(Author {
+                    login: "alice".to_string(),
+                }),
+                body: "hello".to_string(),
+                created_at: "2025-06-15T00:00:00Z".to_string(),
+                updated_at: "2025-06-15T00:01:00Z".to_string(),
+            }],
+        };
+        pr.reviews = ReviewConnection {
+            nodes: vec![ReviewNode {
+                id: "review-1".to_string(),
+                author: Some(Author {
+                    login: "bob".to_string(),
+                }),
+                body: "looks good".to_string(),
+                created_at: "2025-06-15T00:02:00Z".to_string(),
+                updated_at: "2025-06-15T00:03:00Z".to_string(),
+                state: "APPROVED".to_string(),
+                submitted_at: Some("2025-06-15T00:03:00Z".to_string()),
+            }],
         };
 
-        assert_eq!(map_rollup_ci_status(&rollup), CiStatus::Failure);
+        let result = process_tracked_pull_request_nodes("owner/repo", &[pr], "alice")
+            .expect("processing succeeds");
+
+        assert_eq!(result.all_comments.len(), 2);
+        assert_eq!(
+            result.open_prs[0].last_comment_at,
+            parse_github_timestamp("2025-06-15T00:03:00Z").unwrap()
+        );
+    }
+
+    #[test]
+    fn map_approval_status_prefers_changes_requested() {
+        let pr = test_pr_with_reviews(&["APPROVED", "CHANGES_REQUESTED"]);
+
+        assert_eq!(map_approval_status(&pr), ApprovalStatus::ChangesRequested);
+    }
+
+    #[test]
+    fn graphql_pr_to_model_maps_requested_reviewers_and_user_reviewed() {
+        let mut pr = test_pr_with_reviews(&["APPROVED"]);
+        pr.review_requests = ReviewRequestConnection {
+            nodes: vec![ReviewRequestNode {
+                requested_reviewer: Some(RequestedReviewer {
+                    login: Some("carol".to_string()),
+                }),
+            }],
+        };
+        pr.latest_reviews = LatestReviewConnection {
+            nodes: vec![LatestReviewNode {
+                state: "APPROVED".to_string(),
+                submitted_at: Some("2025-06-15T00:00:01Z".to_string()),
+                author: Some(Author {
+                    login: "alice".to_string(),
+                }),
+            }],
+        };
+
+        let model = graphql_pr_to_model("owner/repo", &pr, "Alice").expect("mapping succeeds");
+
+        assert_eq!(model.requested_reviewers, vec!["carol".to_string()]);
+        assert!(model.user_has_reviewed);
     }
 }

@@ -10,6 +10,13 @@ Architecture follows **functional core / imperative shell**: pure business logic
 (models, scoring, diffing, TUI state) is strictly separated from I/O (database,
 HTTP, terminal). This makes the core exhaustively testable without mocks.
 
+The TUI state is the one exception to this. Even though TUI state can be
+put into pure functions that derive state before rendering. That is 
+unecessary abstraction for a UI that can be quickly smoke tested
+and shouldn't have many conditionals in it anyway if the business logic
+is correctly factored and organized into pure processing functions.
+So keep the TUI code slim and readable even at the cost of purity.
+
 ## Build / Lint / Test Commands
 
 ```sh
@@ -84,12 +91,9 @@ migrations/           # SQLite migrations (sqlx, 000001–000006)
 - `models.rs` — domain types + behavior (`is_acknowledged`, `all_changes`, etc.)
 - `core.rs` — sync diff algorithm (classifies PRs as new/updated/removed)
 - `scoring.rs` — importance scoring
-- `tui/state.rs`, `tui/widgets.rs`, `tui/navigation.rs` — TUI state & helpers
-- `tui/pr_list/state.rs`, `tui/authors/state.rs` — screen-specific state
 
 **Impure (shell) modules** — perform I/O, no unit tests (tested via integration):
 - `db.rs`, `github/`, `sync.rs`, `service.rs`, `cli_app.rs`
-- `tui/app.rs`, `tui/*/events.rs`, `tui/*/render.rs`, `tui/tasks.rs`
 
 When adding logic, put it in a pure module and test it there. Shell modules
 should be thin wrappers that call pure functions and perform I/O.

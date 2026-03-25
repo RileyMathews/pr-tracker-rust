@@ -2,6 +2,7 @@ use tokio::sync::mpsc;
 
 use crate::db::DatabaseRepository;
 use crate::github::GitHubClient;
+use crate::pr_repository::{partition_team_authors, TeamAuthorBuckets};
 use crate::sync::{sync_all_tracked_with_progress, SyncProgress, SyncRunSummary};
 
 /// Background job types that can be active.
@@ -19,10 +20,7 @@ pub enum BackgroundMessage {
 }
 
 /// Payload returned from team fetch operations.
-pub struct TeamsPayload {
-    pub tracked: Vec<String>,
-    pub untracked: Vec<String>,
-}
+pub type TeamsPayload = TeamAuthorBuckets;
 
 /// Spawn a full sync job in the background.
 pub fn spawn_full_sync(repo: DatabaseRepository, tx: mpsc::UnboundedSender<BackgroundMessage>) {
@@ -65,37 +63,24 @@ async fn run_teams_fetch(repo: DatabaseRepository) -> anyhow::Result<TeamsPayloa
     })?;
     let github = GitHubClient::new(user.access_token.clone())?;
 
-    let tracked_authors = repo.get_tracked_authors().await?;
-    let tracked_set: std::collections::HashSet<String> =
-        tracked_authors.iter().map(|s| s.to_lowercase()).collect();
-    let current_login_lower = user.username.to_lowercase();
-
     let teams = github.fetch_user_teams().await?;
 
-    let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
     let mut all_members: Vec<String> = Vec::new();
     for team in &teams {
         let members = github
             .fetch_team_members(&team.organization.login, &team.slug)
             .await?;
         for member in members {
-            let lower = member.login.to_lowercase();
-            if lower != current_login_lower && seen.insert(lower.clone()) {
-                all_members.push(member.login);
-            }
+            all_members.push(member.login);
         }
     }
 
-    let mut untracked: Vec<String> = all_members
-        .into_iter()
-        .filter(|login| !tracked_set.contains(&login.to_lowercase()))
-        .collect();
-    untracked.sort();
-
-    let mut tracked = tracked_authors;
-    tracked.sort();
-
-    Ok(TeamsPayload { tracked, untracked })
+    let tracked_authors = repo.get_tracked_authors().await?;
+    Ok(partition_team_authors(
+        all_members,
+        &tracked_authors,
+        &user.username,
+    ))
 }
 
 /// Get a human-readable label for a background job.

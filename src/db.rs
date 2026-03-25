@@ -5,6 +5,7 @@ use sqlx::{FromRow, Row, SqlitePool};
 use std::str::FromStr;
 
 use crate::models::{ApprovalStatus, CiStatus, PrComment, PullRequest, TrackedRepository, User};
+use crate::pr_repository::{build_pr_dashboard, PrDashboard};
 
 pub static MIGRATOR: Migrator = sqlx::migrate!("./migrations");
 
@@ -143,6 +144,11 @@ impl DatabaseRepository {
     pub async fn get_all_prs(&self) -> anyhow::Result<Vec<PullRequest>> {
         // Delegate to the JOIN-based implementation
         self.get_all_prs_with_comments().await
+    }
+
+    pub async fn get_pr_dashboard(&self, username: &str) -> anyhow::Result<PrDashboard> {
+        let prs = self.get_all_prs_with_comments().await?;
+        Ok(build_pr_dashboard(prs, username))
     }
 
     pub async fn get_all_prs_with_comments(&self) -> anyhow::Result<Vec<PullRequest>> {

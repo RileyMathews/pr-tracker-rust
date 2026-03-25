@@ -3,6 +3,7 @@ pub mod core;
 pub mod db;
 pub mod github;
 pub mod models;
+pub mod pr_repository;
 pub mod scoring;
 pub mod service;
 pub mod sync;

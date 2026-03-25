@@ -1,18 +1,18 @@
 use crossterm::event::{KeyCode, KeyEvent, KeyEventKind};
 
 use crate::db::DatabaseRepository;
+use crate::tui::action::TuiAction;
 use crate::tui::authors::State;
 use crate::tui::navigation::{AuthorsPane, Screen};
-use crate::tui::pr_list::events::EventResult;
 
 /// Handle a key event for the Authors screen.
 pub async fn handle_event(
     key_event: KeyEvent,
     state: &mut State,
     repo: &DatabaseRepository,
-) -> anyhow::Result<EventResult> {
+) -> anyhow::Result<TuiAction> {
     if key_event.kind != KeyEventKind::Press {
-        return Ok(EventResult::Continue);
+        return Ok(TuiAction::Continue);
     }
 
     let key_code = key_event.code;
@@ -21,9 +21,9 @@ pub async fn handle_event(
         // When loading, only allow Esc and 'q' to exit
         match key_code {
             KeyCode::Esc | KeyCode::Char('q') => {
-                return Ok(EventResult::SwitchScreen(Screen::PrList));
+                return Ok(TuiAction::SwitchScreen(Screen::PrList));
             }
-            _ => return Ok(EventResult::Continue),
+            _ => return Ok(TuiAction::Continue),
         }
     }
 
@@ -35,13 +35,13 @@ pub async fn handle_event(
                 state.tracked_cursor = 0;
                 state.untracked_cursor = 0;
             } else {
-                return Ok(EventResult::SwitchScreen(Screen::PrList));
+                return Ok(TuiAction::SwitchScreen(Screen::PrList));
             }
         }
 
         KeyCode::Char('q') => {
             if state.search_query.is_empty() {
-                return Ok(EventResult::SwitchScreen(Screen::PrList));
+                return Ok(TuiAction::SwitchScreen(Screen::PrList));
             } else {
                 state.search_query.push('q');
                 state.tracked_cursor = 0;
@@ -122,5 +122,5 @@ pub async fn handle_event(
         _ => {}
     }
 
-    Ok(EventResult::Continue)
+    Ok(TuiAction::Continue)
 }

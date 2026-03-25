@@ -12,11 +12,12 @@ use ratatui::Terminal;
 use tokio::sync::mpsc;
 
 use crate::db::DatabaseRepository;
+use crate::pr_repository::{PrOwnerFilter, PrStatusFilter};
 use crate::sync::{format_sync_progress, format_sync_summary};
+use crate::tui::action::TuiAction;
 use crate::tui::authors;
 use crate::tui::navigation::Screen;
 use crate::tui::pr_list;
-use crate::tui::pr_list::events::EventResult;
 use crate::tui::state::SharedState;
 use crate::tui::tasks::{spawn_full_sync, spawn_teams_fetch, BackgroundJob, BackgroundMessage};
 
@@ -56,7 +57,8 @@ pub async fn run() -> anyhow::Result<()> {
         .map(|u| u.username)
         .unwrap_or_default();
 
-    let app_state = AppState::new(SharedState::new(Vec::new(), username));
+    let dashboard = repo.get_pr_dashboard(&username).await?;
+    let app_state = AppState::new(SharedState::new(dashboard, username));
     run_tui(app_state, &repo).await
 }
 
@@ -150,12 +152,26 @@ async fn run_tui_inner(
                         .pr_list
                         .push_sync_log(format_sync_summary(&summary));
 
-                    // Reload PRs from database
-                    app_state.shared.prs = repo.get_all_prs().await?;
-                    let derived = app_state
-                        .pr_list
-                        .derive(&app_state.shared.prs, &app_state.shared.username);
-                    app_state.pr_list.clamp_to_derived(&derived);
+                    // Reload dashboard from database
+                    app_state.shared.dashboard =
+                        repo.get_pr_dashboard(&app_state.shared.username).await?;
+                    let status = match app_state.pr_list.view_mode {
+                        crate::tui::navigation::ViewMode::Active => PrStatusFilter::Active,
+                        crate::tui::navigation::ViewMode::Acknowledged => {
+                            PrStatusFilter::Acknowledged
+                        }
+                    };
+                    let tracked_len = app_state
+                        .shared
+                        .dashboard
+                        .section(PrOwnerFilter::Tracked, status)
+                        .len();
+                    let mine_len = app_state
+                        .shared
+                        .dashboard
+                        .section(PrOwnerFilter::Mine, status)
+                        .len();
+                    app_state.pr_list.clamp_cursors(tracked_len, mine_len);
                 }
                 BackgroundMessage::TeamsFetchFinished(result) => {
                     active_job = None;
@@ -215,8 +231,8 @@ async fn run_tui_inner(
                         )
                         .await?
                         {
-                            EventResult::Quit => should_quit = true,
-                            EventResult::SwitchScreen(screen) => {
+                            TuiAction::Quit => should_quit = true,
+                            TuiAction::SwitchScreen(screen) => {
                                 app_state.current_screen = screen;
                                 // Initialize Authors screen when switching to it
                                 if screen == Screen::AuthorsFromTeams && active_job.is_none() {
@@ -225,31 +241,31 @@ async fn run_tui_inner(
                                     spawn_teams_fetch(repo.clone(), tx.clone());
                                 }
                             }
-                            EventResult::ReviewPr(pr_url) => {
+                            TuiAction::ReviewPr(pr_url) => {
                                 if let Err(err) = review_pr_in_octo_mode(terminal, &pr_url) {
                                     app_state.shared.error = Some(format!(
                                         "Could not open Octo review for {pr_url}: {err}"
                                     ));
                                 }
                             }
-                            EventResult::StartJob(job) => {
+                            TuiAction::StartJob(job) => {
                                 active_job = Some(job);
                                 spinner_tick = 0;
                             }
-                            EventResult::Continue => {}
+                            TuiAction::Continue => {}
                         }
                     }
                     Screen::AuthorsFromTeams => {
                         match authors::events::handle_event(key, &mut app_state.authors, repo)
                             .await?
                         {
-                            EventResult::Quit => should_quit = true,
-                            EventResult::SwitchScreen(screen) => {
+                            TuiAction::Quit => should_quit = true,
+                            TuiAction::SwitchScreen(screen) => {
                                 app_state.current_screen = screen;
                             }
-                            EventResult::ReviewPr(_) => {}
-                            EventResult::StartJob(_) => {}
-                            EventResult::Continue => {}
+                            TuiAction::ReviewPr(_) => {}
+                            TuiAction::StartJob(_) => {}
+                            TuiAction::Continue => {}
                         }
                     }
                 }

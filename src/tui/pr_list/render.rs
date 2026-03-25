@@ -4,7 +4,9 @@ use ratatui::text::{Line, Span, Text};
 use ratatui::widgets::{Block, Borders, HighlightSpacing, List, ListItem, ListState, Paragraph};
 
 use crate::models::PullRequest;
+use crate::pr_repository::{selected_pr_index, PrOwnerFilter, PrStatusFilter};
 use crate::tui::navigation::PrPane;
+use crate::tui::pr_list::state::clamp_cursor;
 use crate::tui::pr_list::State;
 use crate::tui::state::{title_case, truncate, SharedState};
 use crate::tui::tasks::{background_job_label, BackgroundJob};
@@ -20,12 +22,17 @@ pub fn draw(
     active_job: Option<BackgroundJob>,
     spinner_tick: usize,
 ) {
-    let derived = state.derive(&shared.prs, &shared.username);
-    let tracked = &derived.tracked;
-    let mine = &derived.mine;
-    let selected = derived
-        .selected_index_for_focus()
-        .and_then(|index| shared.prs.get(index));
+    let status = match state.view_mode {
+        crate::tui::navigation::ViewMode::Active => PrStatusFilter::Active,
+        crate::tui::navigation::ViewMode::Acknowledged => PrStatusFilter::Acknowledged,
+    };
+    let tracked = shared.dashboard.section(PrOwnerFilter::Tracked, status);
+    let mine = shared.dashboard.section(PrOwnerFilter::Mine, status);
+    let selected = match state.focus {
+        PrPane::Tracked => selected_pr_index(tracked, state.tracked_cursor),
+        PrPane::Mine => selected_pr_index(mine, state.mine_cursor),
+    }
+    .and_then(|index| shared.dashboard.prs.get(index));
 
     let chunks = Layout::default()
         .direction(Direction::Vertical)
@@ -100,6 +107,7 @@ pub fn draw(
             panes[0],
             "Tracked PRs",
             tracked,
+            state.tracked_cursor,
             state.focus == PrPane::Tracked,
             shared,
         );
@@ -108,6 +116,7 @@ pub fn draw(
             panes[1],
             "My PRs",
             mine,
+            state.mine_cursor,
             state.focus == PrPane::Mine,
             shared,
         );
@@ -134,14 +143,14 @@ fn draw_pr_pane(
     frame: &mut ratatui::Frame<'_>,
     area: ratatui::layout::Rect,
     title: &str,
-    pane: &crate::tui::pr_list::state::PaneView,
+    indices: &[usize],
+    cursor: usize,
     focused: bool,
     shared: &SharedState,
 ) {
-    let items: Vec<ListItem<'_>> = pane
-        .indices
+    let items: Vec<ListItem<'_>> = indices
         .iter()
-        .map(|pr_index| &shared.prs[*pr_index])
+        .map(|pr_index| &shared.dashboard.prs[*pr_index])
         .enumerate()
         .map(|(index, pr)| build_list_item(index, pr, &shared.username))
         .collect();
@@ -155,7 +164,7 @@ fn draw_pr_pane(
     let list = List::new(items)
         .block(
             Block::default()
-                .title(format!("{} ({})", title_case(title), pane.len()))
+                .title(format!("{} ({})", title_case(title), indices.len()))
                 .borders(Borders::ALL)
                 .border_style(border_style),
         )
@@ -168,8 +177,8 @@ fn draw_pr_pane(
         .highlight_spacing(HighlightSpacing::Always);
 
     let mut list_state = ListState::default();
-    if focused && pane.selected_index.is_some() {
-        list_state.select(Some(pane.cursor));
+    if focused && !indices.is_empty() {
+        list_state.select(Some(clamp_cursor(cursor, indices.len())));
     }
     frame.render_stateful_widget(list, area, &mut list_state);
 }

@@ -1,4 +1,3 @@
-use std::collections::HashSet;
 use std::io::IsTerminal;
 
 use clap::{Parser, Subcommand};
@@ -6,6 +5,7 @@ use clap::{Parser, Subcommand};
 use crate::db::DatabaseRepository;
 use crate::github::GitHubClient;
 use crate::models::User;
+use crate::pr_repository::partition_team_authors;
 use crate::sync::{
     format_sync_progress, format_sync_summary, sync_all_tracked_with_progress, SyncProgress,
 };
@@ -139,7 +139,6 @@ async fn handle_authors_from_teams(repo: &DatabaseRepository) -> anyhow::Result<
         return Ok(());
     }
 
-    let mut seen_logins: HashSet<String> = HashSet::new();
     let mut all_members: Vec<String> = Vec::new();
 
     for team in &teams {
@@ -147,29 +146,14 @@ async fn handle_authors_from_teams(repo: &DatabaseRepository) -> anyhow::Result<
             .fetch_team_members(&team.organization.login, &team.slug)
             .await?;
         for member in members {
-            if seen_logins.insert(member.login.clone()) {
-                all_members.push(member.login);
-            }
+            all_members.push(member.login);
         }
     }
 
-    let current_login_lower = user.username.to_lowercase();
     let already_tracked: Vec<String> = repo.get_tracked_authors().await?;
-    let tracked_lower: HashSet<String> = already_tracked.iter().map(|s| s.to_lowercase()).collect();
-
-    // Split all_members into already-tracked teammates and new candidates
-    let mut tracked_teammates: Vec<String> = Vec::new();
-    let mut candidates: Vec<String> = Vec::new();
-    for login in all_members {
-        let lower = login.to_lowercase();
-        if lower == current_login_lower {
-            // skip self
-        } else if tracked_lower.contains(&lower) {
-            tracked_teammates.push(login);
-        } else {
-            candidates.push(login);
-        }
-    }
+    let buckets = partition_team_authors(all_members, &already_tracked, &user.username);
+    let tracked_teammates = buckets.tracked;
+    let candidates = buckets.untracked;
 
     if !tracked_teammates.is_empty() {
         println!("Already tracking from your teams:");
@@ -262,9 +246,20 @@ async fn handle_sync(repo: &DatabaseRepository) -> anyhow::Result<()> {
 }
 
 async fn handle_prs(repo: &DatabaseRepository) -> anyhow::Result<()> {
-    let prs = repo.get_all_prs().await?;
-    println!("PRs:");
-    for pr in prs {
+    let username = repo
+        .get_user()
+        .await?
+        .map(|user| user.username)
+        .unwrap_or_default();
+    let dashboard = repo.get_pr_dashboard(&username).await?;
+
+    println!("Active PRs:");
+    for index in dashboard
+        .active_tracked
+        .iter()
+        .chain(dashboard.active_mine.iter())
+    {
+        let pr = &dashboard.prs[*index];
         println!(
             "- #{}: {} (Repository: {}, Author: {})",
             pr.number, pr.title, pr.repository, pr.author

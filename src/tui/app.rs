@@ -50,14 +50,13 @@ pub async fn run() -> anyhow::Result<()> {
     let repo = DatabaseRepository::connect(&db_path).await?;
     repo.apply_migrations().await?;
 
-    let prs = repo.get_all_prs().await?;
     let username = repo
         .get_user()
         .await?
         .map(|u| u.username)
         .unwrap_or_default();
 
-    let app_state = AppState::new(SharedState::new(prs, username));
+    let app_state = AppState::new(SharedState::new(Vec::new(), username));
     run_tui(app_state, &repo).await
 }
 
@@ -146,14 +145,10 @@ async fn run_tui_inner(
                     active_job = None;
                     spinner_tick = 0;
 
-                    match &result {
-                        Ok(summary) => app_state
-                            .pr_list
-                            .push_sync_log(format_sync_summary(summary)),
-                        Err(err) => app_state
-                            .pr_list
-                            .push_sync_log(format!("[sync] sync failed: {err:#}")),
-                    }
+                    let summary = result?;
+                    app_state
+                        .pr_list
+                        .push_sync_log(format_sync_summary(&summary));
 
                     // Reload PRs from database
                     app_state.shared.prs = repo.get_all_prs().await?;

@@ -1,6 +1,7 @@
 use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 
 use crate::db::DatabaseRepository;
+use crate::models::PullRequest;
 use crate::pr_repository::{selected_pr_index, PrOwnerFilter, PrStatusFilter};
 use crate::tui::action::TuiAction;
 use crate::tui::navigation::Screen;
@@ -44,7 +45,7 @@ fn review_pr_url_for_event(
     key_event: KeyEvent,
     state: &State,
     shared: &SharedState,
-) -> Option<String> {
+) -> Option<PullRequest> {
     if key_event.kind != KeyEventKind::Press {
         return None;
     }
@@ -55,7 +56,7 @@ fn review_pr_url_for_event(
         return None;
     }
 
-    selected_index_for_focus(state, shared).map(|pr_index| shared.dashboard.prs[pr_index].url())
+    selected_index_for_focus(state, shared).map(|pr_index| shared.dashboard.prs[pr_index].clone())
 }
 
 /// Handle a key event for the PR List screen.
@@ -67,8 +68,8 @@ pub async fn handle_event(
     repo: &DatabaseRepository,
     tx: &mpsc::UnboundedSender<BackgroundMessage>,
 ) -> anyhow::Result<TuiAction> {
-    if let Some(pr_url) = review_pr_url_for_event(key_event, state, shared) {
-        return Ok(TuiAction::ReviewPr(pr_url));
+    if let Some(pr) = review_pr_url_for_event(key_event, state, shared) {
+        return Ok(TuiAction::ReviewPr(pr));
     }
 
     if key_event.kind != KeyEventKind::Press {
@@ -185,7 +186,7 @@ mod tests {
     }
 
     #[test]
-    fn review_pr_url_for_event_returns_selected_pr_url_for_ctrl_r() {
+    fn review_pr_url_for_event_returns_selected_pr_for_ctrl_r() {
         let state = State::new();
         let shared = SharedState::new(
             crate::pr_repository::build_pr_dashboard(vec![test_pr(42, "bob")], "alice"),
@@ -195,7 +196,7 @@ mod tests {
 
         assert_eq!(
             review_pr_url_for_event(key_event, &state, &shared),
-            Some("https://github.com/owner/repo/pull/42".to_string())
+            Some(test_pr(42, "bob"))
         );
     }
 

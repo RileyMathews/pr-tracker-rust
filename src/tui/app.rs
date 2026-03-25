@@ -1,4 +1,6 @@
+use std::env;
 use std::io;
+use std::path::PathBuf;
 use std::process::Command;
 use std::time::Duration;
 
@@ -12,6 +14,7 @@ use ratatui::Terminal;
 use tokio::sync::mpsc;
 
 use crate::db::DatabaseRepository;
+use crate::models::PullRequest;
 use crate::pr_repository::{PrOwnerFilter, PrStatusFilter};
 use crate::sync::{format_sync_progress, format_sync_summary};
 use crate::tui::action::TuiAction;
@@ -91,13 +94,21 @@ fn restore_terminal() -> anyhow::Result<()> {
 
 fn review_pr_in_octo_mode(
     terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
-    pr_url: &str,
+    pr: &PullRequest,
 ) -> anyhow::Result<()> {
     restore_terminal()?;
 
-    let review_result = Command::new("nvim")
+    let home_dir = env::var_os("HOME").unwrap_or_else(|| "~".into());
+    let repo_path = PathBuf::from(home_dir)
+        .join("code")
+        .join(pr.repository_name());
+    let tmux_command = format!("nvim '+Octo pr edit {}'", pr.number);
+
+    let review_result = Command::new("tmux")
+        .arg("new-window")
         .arg("-c")
-        .arg(format!(":Octo {pr_url}"))
+        .arg(repo_path)
+        .arg(tmux_command)
         .status();
 
     let mut restore_error = None;
@@ -241,10 +252,11 @@ async fn run_tui_inner(
                                     spawn_teams_fetch(repo.clone(), tx.clone());
                                 }
                             }
-                            TuiAction::ReviewPr(pr_url) => {
-                                if let Err(err) = review_pr_in_octo_mode(terminal, &pr_url) {
+                            TuiAction::ReviewPr(pr) => {
+                                if let Err(err) = review_pr_in_octo_mode(terminal, &pr) {
                                     app_state.shared.error = Some(format!(
-                                        "Could not open Octo review for {pr_url}: {err}"
+                                        "Could not open Octo review for {}: {err}",
+                                        pr.url()
                                     ));
                                 }
                             }

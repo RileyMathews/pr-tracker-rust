@@ -111,6 +111,12 @@ pub struct PullRequest {
 }
 
 impl PullRequest {
+    pub fn repository_name(&self) -> &str {
+        self.repository
+            .rsplit_once('/')
+            .map_or(self.repository.as_str(), |(_, repo_name)| repo_name)
+    }
+
     pub fn is_acknowledged(&self) -> bool {
         let Some(last_ack) = self.last_acknowledged_at else {
             return false;
@@ -516,6 +522,21 @@ mod tests {
         let pr = build_pull_request(&[]);
 
         assert_eq!(pr.updates_since_last_ack(&author()), "  New PR | ");
+    }
+
+    #[test]
+    fn repository_name_returns_repo_without_owner_prefix() {
+        let pr = build_pull_request(&[]);
+
+        assert_eq!(pr.repository_name(), "repo");
+    }
+
+    #[test]
+    fn repository_name_returns_original_value_when_no_owner_prefix_exists() {
+        let mut pr = build_pull_request(&[]);
+        pr.repository = "repo".to_string();
+
+        assert_eq!(pr.repository_name(), "repo");
     }
 
     #[test]

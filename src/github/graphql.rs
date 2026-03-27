@@ -1,76 +1,85 @@
 use serde::Deserialize;
+use serde_json::Value;
 
-pub const TRACKED_PULL_REQUESTS_SEARCH_QUERY: &str = r#"
-query($query: String!, $cursor: String) {
-  search(query: $query, type: ISSUE, first: 100, after: $cursor) {
-    pageInfo {
-      hasNextPage
-      endCursor
-    }
-    nodes {
-      ... on PullRequest {
-        number
-        title
-        isDraft
-        createdAt
-        updatedAt
-        state
-        headRefOid
-        author {
-          login
-        }
-        reviewRequests(first: 100) {
-          nodes {
-            requestedReviewer {
-              ... on User {
-                login
-              }
-            }
-          }
-        }
-        commits(last: 1) {
-          nodes {
-            commit {
-              statusCheckRollup {
-                state
-              }
-            }
-          }
-        }
-        comments(last: 100) {
-          nodes {
-            id
-            author { login }
-            body
-            createdAt
-            updatedAt
-          }
-        }
-        reviews(last: 100) {
-          nodes {
-            id
-            author { login }
-            body
-            createdAt
-            updatedAt
-            state
-            submittedAt
-          }
-        }
-        latestReviews(first: 100) {
-          nodes {
-            state
-            submittedAt
-            author {
-              login
-            }
-          }
-        }
+const TRACKED_PULL_REQUEST_FIELDS: &str = r#"
+number
+title
+isDraft
+createdAt
+updatedAt
+state
+headRefOid
+author {
+  login
+}
+reviewRequests(first: 100) {
+  nodes {
+    requestedReviewer {
+      ... on User {
+        login
       }
     }
   }
 }
+commits(last: 1) {
+  nodes {
+    commit {
+      statusCheckRollup {
+        state
+      }
+    }
+  }
+}
+comments(last: 100) {
+  nodes {
+    id
+    author { login }
+    body
+    createdAt
+    updatedAt
+  }
+}
+reviews(last: 100) {
+  nodes {
+    id
+    author { login }
+    body
+    createdAt
+    updatedAt
+    state
+    submittedAt
+  }
+}
+latestReviews(first: 100) {
+  nodes {
+    state
+    submittedAt
+    author {
+      login
+    }
+  }
+}
 "#;
+
+pub fn tracked_pull_requests_search_query() -> String {
+    format!(
+        r#"
+query($query: String!, $cursor: String) {{
+  search(query: $query, type: ISSUE, first: 100, after: $cursor) {{
+    pageInfo {{
+      hasNextPage
+      endCursor
+    }}
+    nodes {{
+      ... on PullRequest {{
+        {TRACKED_PULL_REQUEST_FIELDS}
+      }}
+    }}
+  }}
+}}
+"#
+    )
+}
 
 #[derive(Debug, Deserialize)]
 pub struct TrackedPullRequestSearchResponse {
@@ -211,6 +220,17 @@ pub struct LatestReviewNode {
     pub author: Option<Author>,
 }
 
+#[derive(Debug, Deserialize)]
+pub struct PullRequestsByNumberResponse {
+    pub repository: PullRequestsByNumberRepository,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct PullRequestsByNumberRepository {
+    #[serde(flatten)]
+    pub pull_requests: serde_json::Map<String, Value>,
+}
+
 pub fn build_tracked_pull_requests_search_query(
     repo_name: &str,
     authors: &[String],
@@ -226,6 +246,32 @@ pub fn build_tracked_pull_requests_search_query(
     terms.push("sort:updated-desc".to_string());
 
     terms.join(" ")
+}
+
+pub fn build_pull_requests_by_number_query(pr_numbers: &[i64]) -> String {
+    let selections = pr_numbers
+        .iter()
+        .map(|number| {
+            format!(
+                "    pr_{number}: pullRequest(number: {number}) {{\n      {TRACKED_PULL_REQUEST_FIELDS}\n    }}"
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    format!(
+        r#"
+query($owner: String!, $name: String!) {{
+  repository(owner: $owner, name: $name) {{
+{selections}
+  }}
+}}
+"#
+    )
+}
+
+pub fn pull_request_alias(number: i64) -> String {
+    format!("pr_{number}")
 }
 
 #[cfg(test)]
@@ -257,5 +303,24 @@ mod tests {
         );
 
         assert!(query.contains("updated:>=2026-03-25T01:55:42Z"));
+    }
+
+    #[test]
+    fn tracked_pull_requests_search_query_includes_ci_fields() {
+        let query = tracked_pull_requests_search_query();
+
+        assert!(query.contains("commits(last: 1)"));
+        assert!(query.contains("statusCheckRollup"));
+        assert!(query.contains("latestReviews(first: 100)"));
+    }
+
+    #[test]
+    fn build_pull_requests_by_number_query_uses_aliases() {
+        let query = build_pull_requests_by_number_query(&[42, 99]);
+
+        assert!(query.contains("query($owner: String!, $name: String!)"));
+        assert!(query.contains("pr_42: pullRequest(number: 42)"));
+        assert!(query.contains("pr_99: pullRequest(number: 99)"));
+        assert!(query.contains("statusCheckRollup"));
     }
 }

@@ -1,4 +1,5 @@
 use chrono::{DateTime, Utc};
+use std::collections::HashMap;
 
 use crate::github::graphql;
 use crate::github::GitHubClient;
@@ -23,6 +24,55 @@ pub async fn fetch_tracked_pull_requests_for_sync(
         .await?;
 
     process_tracked_pull_request_nodes(repo_name, &prs, username)
+}
+
+pub async fn refresh_tracked_pull_requests_for_sync(
+    github: &GitHubClient,
+    repo_name: &str,
+    pr_numbers: &[i64],
+    username: &str,
+) -> anyhow::Result<TrackedPullRequestSyncData> {
+    let prs = github
+        .fetch_pull_requests_by_numbers(repo_name, pr_numbers)
+        .await?;
+
+    process_tracked_pull_request_nodes(repo_name, &prs, username)
+}
+
+pub fn merge_tracked_pull_request_sync_data(
+    discovery: TrackedPullRequestSyncData,
+    refresh: TrackedPullRequestSyncData,
+) -> TrackedPullRequestSyncData {
+    let mut open_prs_by_number: HashMap<i64, PullRequest> = discovery
+        .open_prs
+        .into_iter()
+        .map(|pr| (pr.number, pr))
+        .collect();
+    for pr in refresh.open_prs {
+        open_prs_by_number.insert(pr.number, pr);
+    }
+
+    let mut comments_by_id: HashMap<String, PrComment> = discovery
+        .all_comments
+        .into_iter()
+        .map(|comment| (comment.id.clone(), comment))
+        .collect();
+    for comment in refresh.all_comments {
+        comments_by_id.insert(comment.id.clone(), comment);
+    }
+
+    let mut open_prs: Vec<PullRequest> = open_prs_by_number.into_values().collect();
+    open_prs.sort_by_key(|pr| pr.number);
+
+    let mut all_comments: Vec<PrComment> = comments_by_id.into_values().collect();
+    all_comments.sort_by(|left, right| left.id.cmp(&right.id));
+
+    TrackedPullRequestSyncData {
+        open_prs,
+        all_comments,
+        closed_pr_numbers: discovery.closed_pr_numbers,
+        max_updated_at: discovery.max_updated_at,
+    }
 }
 
 fn process_tracked_pull_request_nodes(
@@ -414,5 +464,28 @@ mod tests {
 
         assert_eq!(model.requested_reviewers, vec!["carol".to_string()]);
         assert!(model.user_has_reviewed);
+    }
+
+    #[test]
+    fn merge_tracked_pull_request_sync_data_prefers_refresh_copy() {
+        let mut discovery = process_tracked_pull_request_nodes(
+            "owner/repo",
+            &[test_pr(1, "OPEN", "2025-06-15T00:00:00Z", Some("FAILURE"))],
+            "alice",
+        )
+        .expect("processing succeeds");
+        let refresh = process_tracked_pull_request_nodes(
+            "owner/repo",
+            &[test_pr(1, "OPEN", "2025-06-15T00:00:00Z", Some("SUCCESS"))],
+            "alice",
+        )
+        .expect("processing succeeds");
+
+        discovery.closed_pr_numbers = vec![99];
+        let merged = merge_tracked_pull_request_sync_data(discovery, refresh);
+
+        assert_eq!(merged.open_prs.len(), 1);
+        assert_eq!(merged.open_prs[0].ci_status, CiStatus::Success);
+        assert_eq!(merged.closed_pr_numbers, vec![99]);
     }
 }

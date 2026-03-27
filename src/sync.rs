@@ -240,21 +240,30 @@ async fn sync_single_repo(
     // Step 1: Compute cutoff
     let discovery_cutoff = compute_discovery_cutoff(tracked_repo.last_synced_at, pr_age_cutoff());
 
-    // Step 2: Fetch tracked PRs updated since the cutoff.
+    // Step 2: Fetch tracked PRs updated since the cutoff and refresh known open PRs.
     let existing_prs = repository.get_prs_by_repository(repo_name).await?;
+    let tracked_pr_numbers: Vec<i64> = existing_prs.iter().map(|pr| pr.number).collect();
+    let (discovery_sync_data, refresh_sync_data) = tokio::try_join!(
+        service::fetch_tracked_pull_requests_for_sync(
+            github,
+            repo_name,
+            tracked_authors,
+            discovery_cutoff,
+            username,
+        ),
+        service::refresh_tracked_pull_requests_for_sync(
+            github,
+            repo_name,
+            &tracked_pr_numbers,
+            username
+        ),
+    )?;
     let service::TrackedPullRequestSyncData {
         open_prs: fresh_prs,
         all_comments,
         closed_pr_numbers,
         max_updated_at,
-    } = service::fetch_tracked_pull_requests_for_sync(
-        github,
-        repo_name,
-        tracked_authors,
-        discovery_cutoff,
-        username,
-    )
-    .await?;
+    } = service::merge_tracked_pull_request_sync_data(discovery_sync_data, refresh_sync_data);
 
     // Step 3: Diff & persist.
     let SyncDiff {

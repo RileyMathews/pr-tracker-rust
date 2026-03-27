@@ -429,6 +429,33 @@ mod tests {
     }
 
     #[test]
+    fn updates_ci_status_even_when_updated_at_is_unchanged() {
+        let before = dt(2025, 1, 1, 0);
+        let now = dt(2025, 1, 1, 2);
+
+        let db_pr = PullRequest {
+            ci_status: CiStatus::Failure,
+            updated_at: before,
+            last_ci_status_update_at: before,
+            ..empty_pr("acme/repo", 1)
+        };
+        let fresh_pr = PullRequest {
+            ci_status: CiStatus::Success,
+            updated_at: before,
+            ..empty_pr("acme/repo", 1)
+        };
+
+        let result = process_pull_request_sync_results(&[db_pr], &[fresh_pr], now);
+
+        assert_eq!(result.updated_prs.len(), 1);
+        assert_eq!(result.updated_prs[0].pr.ci_status, CiStatus::Success);
+        assert_eq!(result.updated_prs[0].pr.last_ci_status_update_at, now);
+        assert!(result.updated_prs[0]
+            .reasons
+            .contains(&super::UpdateReason::CiStatusChanged));
+    }
+
+    #[test]
     fn updates_review_status_from_api_timestamp() {
         let before = dt(2025, 1, 1, 0);
         let api_review_time = dt(2025, 1, 1, 1);

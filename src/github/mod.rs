@@ -108,6 +108,7 @@ impl GitHubClient {
         let mut cursor: Option<String> = None;
         let updated_after =
             updated_after.map(|cutoff| cutoff.to_rfc3339_opts(chrono::SecondsFormat::Secs, true));
+        let query = graphql::tracked_pull_requests_search_query();
         let search_query = graphql::build_tracked_pull_requests_search_query(
             repo_name,
             authors,
@@ -120,9 +121,8 @@ impl GitHubClient {
                 "cursor": cursor,
             });
 
-            let response: graphql::TrackedPullRequestSearchResponse = self
-                .post_graphql(graphql::TRACKED_PULL_REQUESTS_SEARCH_QUERY, variables)
-                .await?;
+            let response: graphql::TrackedPullRequestSearchResponse =
+                self.post_graphql(&query, variables).await?;
 
             let search = response.search;
             all_nodes.extend(search.nodes);
@@ -134,6 +134,48 @@ impl GitHubClient {
                 }
             } else {
                 break;
+            }
+        }
+
+        Ok(all_nodes)
+    }
+
+    pub async fn fetch_pull_requests_by_numbers(
+        &self,
+        repo_name: &str,
+        pr_numbers: &[i64],
+    ) -> anyhow::Result<Vec<graphql::PullRequestNode>> {
+        ensure_not_blank("repo name", repo_name)?;
+        if pr_numbers.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let (owner, name) = split_repo_name(repo_name)?;
+        let mut all_nodes = Vec::new();
+
+        for chunk in pr_numbers.chunks(25) {
+            let query = graphql::build_pull_requests_by_number_query(chunk);
+            let variables = serde_json::json!({
+                "owner": owner,
+                "name": name,
+            });
+
+            let response: graphql::PullRequestsByNumberResponse =
+                self.post_graphql(&query, variables).await?;
+
+            for number in chunk {
+                let alias = graphql::pull_request_alias(*number);
+                let Some(value) = response.repository.pull_requests.get(&alias) else {
+                    continue;
+                };
+
+                if value.is_null() {
+                    continue;
+                }
+
+                let node = serde_json::from_value(value.clone())
+                    .map_err(|err| anyhow::anyhow!("error decoding graphql pull request: {err}"))?;
+                all_nodes.push(node);
             }
         }
 
@@ -282,6 +324,12 @@ fn ensure_not_blank(label: impl Display, value: &str) -> anyhow::Result<()> {
         anyhow::bail!("{} is required", label);
     }
     Ok(())
+}
+
+fn split_repo_name(repo_name: &str) -> anyhow::Result<(&str, &str)> {
+    repo_name
+        .split_once('/')
+        .ok_or_else(|| anyhow::anyhow!("repo name must be in 'owner/name' format: {repo_name}"))
 }
 
 pub fn parse_next_url(link_header: &str) -> Option<String> {

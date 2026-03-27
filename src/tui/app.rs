@@ -102,7 +102,7 @@ fn review_pr_in_octo_mode(
     let repo_path = PathBuf::from(home_dir)
         .join("code")
         .join(pr.repository_name());
-    let tmux_command = format!("nvim '+Octo pr edit {}'", pr.number);
+    let tmux_command = format!("nvim '+GHLitePROpen {}'", pr.number);
 
     let review_result = Command::new("tmux")
         .arg("new-window")

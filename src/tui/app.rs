@@ -1,7 +1,7 @@
 use std::env;
 use std::io;
 use std::path::PathBuf;
-use std::process::Command;
+use std::process::{Command, Stdio};
 use std::time::Duration;
 
 use crossterm::event::{self, Event};
@@ -93,42 +93,20 @@ fn restore_terminal() -> anyhow::Result<()> {
 }
 
 fn review_pr_in_octo_mode(
-    terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
     pr: &PullRequest,
-) -> anyhow::Result<()> {
-    restore_terminal()?;
-
+) -> () {
     let home_dir = env::var_os("HOME").unwrap_or_else(|| "~".into());
     let repo_path = PathBuf::from(home_dir)
         .join("code")
         .join(pr.repository_name());
-    let tmux_command = format!("nvim '+lua require(\"ghlite\").open_pr({})'", pr.number);
-
-    let review_result = Command::new("tmux")
-        .arg("new-window")
+    let _ = Command::new("ghostty")
+        .arg("+new-window")
+        .arg(format!("--working-directory={}", repo_path.display()))
+        .arg("-e")
+        .arg("fish")
         .arg("-c")
-        .arg(repo_path)
-        .arg(tmux_command)
-        .status();
-
-    let mut restore_error = None;
-    if let Err(err) = init_terminal().map(|new_terminal| {
-        *terminal = new_terminal;
-    }) {
-        restore_error = Some(err);
-    }
-
-    if let Some(err) = restore_error {
-        return Err(err);
-    }
-
-    terminal.clear()?;
-
-    match review_result {
-        Ok(status) if status.success() => Ok(()),
-        Ok(status) => anyhow::bail!("Neovim exited with status {status}"),
-        Err(err) => Err(err.into()),
-    }
+        .arg(format!("pr_review {} {}", repo_path.display(), pr.number))
+        .spawn();
 }
 
 /// Main TUI event loop.
@@ -253,12 +231,7 @@ async fn run_tui_inner(
                                 }
                             }
                             TuiAction::ReviewPr(pr) => {
-                                if let Err(err) = review_pr_in_octo_mode(terminal, &pr) {
-                                    app_state.shared.error = Some(format!(
-                                        "Could not open Octo review for {}: {err}",
-                                        pr.url()
-                                    ));
-                                }
+                                review_pr_in_octo_mode(&pr) 
                             }
                             TuiAction::StartJob(job) => {
                                 active_job = Some(job);

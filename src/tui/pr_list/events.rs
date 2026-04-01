@@ -69,7 +69,7 @@ pub async fn handle_event(
     tx: &mpsc::UnboundedSender<BackgroundMessage>,
 ) -> anyhow::Result<TuiAction> {
     if let Some(pr) = review_pr_url_for_event(key_event, state, shared) {
-        return Ok(TuiAction::ReviewPr(pr));
+        return Ok(TuiAction::ReviewPr(Box::new(pr)));
     }
 
     if key_event.kind != KeyEventKind::Press {

@@ -355,6 +355,13 @@ impl DatabaseRepository {
         Ok(())
     }
 
+    pub async fn reset_all_tracked_repositories_last_synced_at(&self) -> anyhow::Result<usize> {
+        let result = sqlx::query("UPDATE tracked_repositories SET last_synced_at_unix = NULL")
+            .execute(&self.pool)
+            .await?;
+        Ok(result.rows_affected() as usize)
+    }
+
     pub async fn update_tracked_repository_last_synced_at(
         &self,
         repo: &str,

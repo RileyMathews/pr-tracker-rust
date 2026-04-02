@@ -47,6 +47,7 @@ enum RepositoryCommand {
     List,
     Add { repository: String },
     Remove { repository: String },
+    ResetSync,
 }
 
 pub async fn run_from_args<I, T>(args: I) -> anyhow::Result<()>
@@ -213,6 +214,10 @@ async fn handle_repositories(
         RepositoryCommand::Remove { repository } => {
             repo.delete_tracked_repository(&repository).await?;
             println!("Repository '{}' removed successfully", repository);
+        }
+        RepositoryCommand::ResetSync => {
+            let count = repo.reset_all_tracked_repositories_last_synced_at().await?;
+            println!("Reset sync timestamps for {} repository(ies)", count);
         }
     }
 

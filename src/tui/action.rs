@@ -6,6 +6,6 @@ pub enum TuiAction {
     Continue,
     Quit,
     SwitchScreen(Screen),
-    ReviewPr(PullRequest),
+    ReviewPr(Box<PullRequest>),
     StartJob(BackgroundJob),
 }

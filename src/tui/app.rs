@@ -1,7 +1,7 @@
 use std::env;
 use std::io;
 use std::path::PathBuf;
-use std::process::{Command, Stdio};
+use std::process::Command;
 use std::time::Duration;
 
 use crossterm::event::{self, Event};
@@ -92,9 +92,7 @@ fn restore_terminal() -> anyhow::Result<()> {
     Ok(())
 }
 
-fn review_pr_in_octo_mode(
-    pr: &PullRequest,
-) -> () {
+fn review_pr_in_octo_mode(pr: &PullRequest) {
     let home_dir = env::var_os("HOME").unwrap_or_else(|| "~".into());
     let repo_path = PathBuf::from(home_dir)
         .join("code")
@@ -230,9 +228,7 @@ async fn run_tui_inner(
                                     spawn_teams_fetch(repo.clone(), tx.clone());
                                 }
                             }
-                            TuiAction::ReviewPr(pr) => {
-                                review_pr_in_octo_mode(&pr) 
-                            }
+                            TuiAction::ReviewPr(pr) => review_pr_in_octo_mode(&pr),
                             TuiAction::StartJob(job) => {
                                 active_job = Some(job);
                                 spinner_tick = 0;

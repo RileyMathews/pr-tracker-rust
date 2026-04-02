@@ -1,7 +1,7 @@
 use serde::Deserialize;
 use serde_json::Value;
 
-const TRACKED_PULL_REQUEST_FIELDS: &str = r#"
+const SEARCH_PULL_REQUEST_FIELDS: &str = r#"
 number
 title
 isDraft
@@ -17,15 +17,6 @@ reviewRequests(first: 100) {
     requestedReviewer {
       ... on User {
         login
-      }
-    }
-  }
-}
-commits(last: 1) {
-  nodes {
-    commit {
-      statusCheckRollup {
-        state
       }
     }
   }
@@ -61,6 +52,86 @@ latestReviews(first: 100) {
 }
 "#;
 
+fn pull_request_fields_with_required_ci(pr_number_expression: &str) -> String {
+    format!(
+        r#"
+number
+title
+isDraft
+createdAt
+updatedAt
+state
+headRefOid
+author {{
+  login
+}}
+reviewRequests(first: 100) {{
+  nodes {{
+    requestedReviewer {{
+      ... on User {{
+        login
+      }}
+    }}
+  }}
+}}
+commits(last: 1) {{
+  nodes {{
+    commit {{
+      statusCheckRollup {{
+        state
+        contexts(first: 100) {{
+          nodes {{
+            __typename
+            ... on CheckRun {{
+              name
+              status
+              conclusion
+              isRequired(pullRequestNumber: {pr_number_expression})
+            }}
+            ... on StatusContext {{
+              context
+              state
+              isRequired(pullRequestNumber: {pr_number_expression})
+            }}
+          }}
+        }}
+      }}
+    }}
+  }}
+}}
+comments(last: 100) {{
+  nodes {{
+    id
+    author {{ login }}
+    body
+    createdAt
+    updatedAt
+  }}
+}}
+reviews(last: 100) {{
+  nodes {{
+    id
+    author {{ login }}
+    body
+    createdAt
+    updatedAt
+    state
+    submittedAt
+  }}
+}}
+latestReviews(first: 100) {{
+  nodes {{
+    state
+    submittedAt
+    author {{
+      login
+    }}
+  }}
+}}
+"#
+    )
+}
+
 pub fn tracked_pull_requests_search_query() -> String {
     format!(
         r#"
@@ -72,7 +143,7 @@ query($query: String!, $cursor: String) {{
     }}
     nodes {{
       ... on PullRequest {{
-        {TRACKED_PULL_REQUEST_FIELDS}
+        {SEARCH_PULL_REQUEST_FIELDS}
       }}
     }}
   }}
@@ -118,6 +189,7 @@ pub struct PullRequestNode {
     pub review_requests: ReviewRequestConnection,
     #[serde(rename = "headRefOid")]
     pub head_ref_oid: String,
+    #[serde(default)]
     pub commits: CommitConnection,
     pub comments: CommentConnection,
     pub reviews: ReviewConnection,
@@ -147,7 +219,7 @@ pub struct RequestedReviewer {
     pub login: Option<String>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Default, Deserialize)]
 pub struct CommitConnection {
     #[serde(default)]
     pub nodes: Vec<CommitNode>,
@@ -167,6 +239,32 @@ pub struct CommitDetail {
 #[derive(Debug, Deserialize)]
 pub struct StatusCheckRollup {
     pub state: String,
+    #[serde(default)]
+    pub contexts: StatusCheckRollupContextConnection,
+}
+
+#[derive(Debug, Default, Deserialize)]
+pub struct StatusCheckRollupContextConnection {
+    #[serde(default)]
+    pub nodes: Vec<StatusCheckRollupContext>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(tag = "__typename")]
+pub enum StatusCheckRollupContext {
+    CheckRun {
+        name: String,
+        status: String,
+        conclusion: Option<String>,
+        #[serde(rename = "isRequired")]
+        is_required: bool,
+    },
+    StatusContext {
+        context: String,
+        state: String,
+        #[serde(rename = "isRequired")]
+        is_required: bool,
+    },
 }
 
 #[derive(Debug, Deserialize)]
@@ -252,9 +350,8 @@ pub fn build_pull_requests_by_number_query(pr_numbers: &[i64]) -> String {
     let selections = pr_numbers
         .iter()
         .map(|number| {
-            format!(
-                "    pr_{number}: pullRequest(number: {number}) {{\n      {TRACKED_PULL_REQUEST_FIELDS}\n    }}"
-            )
+            let fields = pull_request_fields_with_required_ci(&number.to_string());
+            format!("    pr_{number}: pullRequest(number: {number}) {{\n      {fields}\n    }}")
         })
         .collect::<Vec<_>>()
         .join("\n");
@@ -309,8 +406,7 @@ mod tests {
     fn tracked_pull_requests_search_query_includes_ci_fields() {
         let query = tracked_pull_requests_search_query();
 
-        assert!(query.contains("commits(last: 1)"));
-        assert!(query.contains("statusCheckRollup"));
+        assert!(!query.contains("statusCheckRollup"));
         assert!(query.contains("latestReviews(first: 100)"));
     }
 
@@ -322,5 +418,7 @@ mod tests {
         assert!(query.contains("pr_42: pullRequest(number: 42)"));
         assert!(query.contains("pr_99: pullRequest(number: 99)"));
         assert!(query.contains("statusCheckRollup"));
+        assert!(query.contains("isRequired(pullRequestNumber: 42)"));
+        assert!(query.contains("isRequired(pullRequestNumber: 99)"));
     }
 }

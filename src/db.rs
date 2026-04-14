@@ -2,6 +2,8 @@ use chrono::{DateTime, Utc};
 use sqlx::migrate::Migrator;
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
 use sqlx::{FromRow, Row, SqlitePool};
+use std::fs;
+use std::path::Path;
 use std::str::FromStr;
 
 use crate::models::{ApprovalStatus, CiStatus, PrComment, PullRequest, TrackedRepository, User};
@@ -16,6 +18,8 @@ pub struct DatabaseRepository {
 
 impl DatabaseRepository {
     pub async fn connect(database_path: &str) -> anyhow::Result<Self> {
+        ensure_database_parent_dir(database_path)?;
+
         let options = SqliteConnectOptions::from_str(database_path)?
             .create_if_missing(true)
             .pragma("foreign_keys", "ON");
@@ -450,6 +454,35 @@ impl DatabaseRepository {
     }
 }
 
+fn ensure_database_parent_dir(database_path: &str) -> anyhow::Result<()> {
+    let Some(path) = sqlite_file_path(database_path) else {
+        return Ok(());
+    };
+
+    let Some(parent) = path.parent() else {
+        return Ok(());
+    };
+
+    fs::create_dir_all(parent)?;
+    Ok(())
+}
+
+fn sqlite_file_path(database_path: &str) -> Option<&Path> {
+    let path = database_path
+        .strip_prefix("sqlite://")
+        .or_else(|| database_path.strip_prefix("sqlite:"))
+        .unwrap_or(database_path)
+        .split('?')
+        .next()
+        .unwrap_or(database_path);
+
+    if path == ":memory:" || path.is_empty() {
+        return None;
+    }
+
+    Some(Path::new(path))
+}
+
 fn unix_to_datetime(seconds: i64) -> anyhow::Result<DateTime<Utc>> {
     DateTime::from_timestamp(seconds, 0)
         .ok_or_else(|| anyhow::anyhow!("invalid unix timestamp: {seconds}"))
@@ -607,5 +640,31 @@ impl PullRequestWithCommentsRow {
             user_has_reviewed: self.user_has_reviewed,
             comments, // NEW: populated from JSON
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::sqlite_file_path;
+
+    #[test]
+    fn extracts_relative_sqlite_file_path() {
+        assert_eq!(
+            sqlite_file_path("sqlite://./db.sqlite3"),
+            Some(std::path::Path::new("./db.sqlite3"))
+        );
+    }
+
+    #[test]
+    fn extracts_absolute_sqlite_file_path() {
+        assert_eq!(
+            sqlite_file_path("sqlite:///tmp/pr-tracker/db.sqlite3?mode=rwc"),
+            Some(std::path::Path::new("/tmp/pr-tracker/db.sqlite3"))
+        );
+    }
+
+    #[test]
+    fn ignores_in_memory_database() {
+        assert_eq!(sqlite_file_path("sqlite::memory:"), None);
     }
 }

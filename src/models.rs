@@ -207,7 +207,18 @@ impl PullRequest {
         let mut updates = String::from("  ");
         for change in changes {
             match change {
-                ChangeKind::NewComment => updates.push_str("New Comment | "),
+                ChangeKind::NewComment => {
+                    let authors = self
+                        .last_acknowledged_at
+                        .map(|last_ack| self.external_comment_authors_since(last_ack, current_user))
+                        .unwrap_or_default();
+
+                    if authors.is_empty() {
+                        updates.push_str("New Comment | ");
+                    } else {
+                        updates.push_str(&format!("new comment(s) from {} | ", authors.join(", ")));
+                    }
+                }
                 ChangeKind::NewCommit => updates.push_str("New Commits | "),
                 ChangeKind::NewCistatus => updates.push_str("CI Status Changed | "),
                 ChangeKind::NewReviewStatus => updates.push_str("Review Status Changed | "),
@@ -251,6 +262,39 @@ impl PullRequest {
         self.comments.iter().any(|comment| {
             comment.updated_at > last_ack && !author_matches_user(&comment.author, current_user)
         })
+    }
+
+    fn external_comment_authors_since(
+        &self,
+        last_ack: DateTime<Utc>,
+        current_user: &str,
+    ) -> Vec<String> {
+        let mut comments: Vec<&PrComment> = self
+            .comments
+            .iter()
+            .filter(|comment| {
+                comment.updated_at > last_ack && !author_matches_user(&comment.author, current_user)
+            })
+            .collect();
+
+        comments.sort_by(|left, right| {
+            right
+                .updated_at
+                .cmp(&left.updated_at)
+                .then_with(|| left.author.cmp(&right.author))
+        });
+
+        let mut authors = Vec::new();
+        for comment in comments {
+            if !authors
+                .iter()
+                .any(|author: &String| author.eq_ignore_ascii_case(&comment.author))
+            {
+                authors.push(comment.author.clone());
+            }
+        }
+
+        authors
     }
 
     fn has_external_review_activity_since(
@@ -522,6 +566,66 @@ mod tests {
         let pr = build_pull_request(&[]);
 
         assert_eq!(pr.updates_since_last_ack(&author()), "  New PR | ");
+    }
+
+    #[test]
+    fn updates_since_last_ack_shows_new_comment_authors() {
+        let ack = timestamp(2);
+        let alice_comment_at = timestamp(3);
+        let bob_comment_at = timestamp(4);
+        let mut pr = build_pull_request(&[]);
+        pr.last_acknowledged_at = Some(ack);
+        pr.last_comment_at = bob_comment_at;
+        pr.updated_at = bob_comment_at;
+        pr.comments = vec![
+            test_comment("alice", alice_comment_at, false),
+            test_comment("bob", bob_comment_at, false),
+        ];
+
+        assert_eq!(
+            pr.updates_since_last_ack(&author()),
+            "  new comment(s) from bob, alice | "
+        );
+    }
+
+    #[test]
+    fn updates_since_last_ack_excludes_my_comment_authorship() {
+        let ack = timestamp(2);
+        let my_comment_at = timestamp(3);
+        let other_comment_at = timestamp(4);
+        let mut pr = build_pull_request(&[]);
+        pr.last_acknowledged_at = Some(ack);
+        pr.last_comment_at = other_comment_at;
+        pr.updated_at = other_comment_at;
+        pr.comments = vec![
+            test_comment(&author(), my_comment_at, false),
+            test_comment("other-user", other_comment_at, false),
+        ];
+
+        assert_eq!(
+            pr.updates_since_last_ack(&author()),
+            "  new comment(s) from other-user | "
+        );
+    }
+
+    #[test]
+    fn updates_since_last_ack_deduplicates_comment_authors() {
+        let ack = timestamp(2);
+        let first_comment_at = timestamp(3);
+        let second_comment_at = timestamp(4);
+        let mut pr = build_pull_request(&[]);
+        pr.last_acknowledged_at = Some(ack);
+        pr.last_comment_at = second_comment_at;
+        pr.updated_at = second_comment_at;
+        pr.comments = vec![
+            test_comment("alice", first_comment_at, false),
+            test_comment("alice", second_comment_at, false),
+        ];
+
+        assert_eq!(
+            pr.updates_since_last_ack(&author()),
+            "  new comment(s) from alice | "
+        );
     }
 
     #[test]

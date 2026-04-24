@@ -291,12 +291,14 @@ fn latest_comment_time(pr: &graphql::PullRequestNode) -> DateTime<Utc> {
         .comments
         .nodes
         .iter()
+        .filter(|c| !is_bot_author(&c.author))
         .filter_map(|c| parse_optional_timestamp(Some(&c.updated_at)));
 
     let review_times = pr
         .reviews
         .nodes
         .iter()
+        .filter(|r| !is_bot_author(&r.author))
         .filter_map(|r| parse_optional_timestamp(Some(&r.updated_at)));
 
     comment_times
@@ -305,10 +307,22 @@ fn latest_comment_time(pr: &graphql::PullRequestNode) -> DateTime<Utc> {
         .unwrap_or(DateTime::UNIX_EPOCH)
 }
 
+fn is_bot_author(author: &Option<graphql::Author>) -> bool {
+    author
+        .as_ref()
+        .and_then(|author| author.actor_type.as_deref())
+        .is_some_and(|actor_type| actor_type == "Bot")
+}
+
 fn map_comments_from_pr(repo_name: &str, pr: &graphql::PullRequestNode) -> Vec<PrComment> {
     let mut comments = Vec::new();
 
-    for comment in &pr.comments.nodes {
+    for comment in pr
+        .comments
+        .nodes
+        .iter()
+        .filter(|comment| !is_bot_author(&comment.author))
+    {
         let author = comment
             .author
             .as_ref()
@@ -333,7 +347,12 @@ fn map_comments_from_pr(repo_name: &str, pr: &graphql::PullRequestNode) -> Vec<P
         });
     }
 
-    for review in &pr.reviews.nodes {
+    for review in pr
+        .reviews
+        .nodes
+        .iter()
+        .filter(|review| !is_bot_author(&review.author))
+    {
         let author = review
             .author
             .as_ref()
@@ -396,6 +415,7 @@ mod tests {
             state: state.to_string(),
             author: Some(Author {
                 login: "alice".to_string(),
+                actor_type: None,
             }),
             review_requests: ReviewRequestConnection { nodes: vec![] },
             head_ref_oid: "abc123".to_string(),
@@ -426,6 +446,7 @@ mod tests {
                     submitted_at: Some(format!("2025-06-15T00:00:0{}Z", index + 1)),
                     author: Some(Author {
                         login: "reviewer".to_string(),
+                        actor_type: None,
                     }),
                 })
                 .collect(),
@@ -539,6 +560,7 @@ mod tests {
                 id: "comment-1".to_string(),
                 author: Some(Author {
                     login: "alice".to_string(),
+                    actor_type: None,
                 }),
                 body: "hello".to_string(),
                 created_at: "2025-06-15T00:00:00Z".to_string(),
@@ -550,6 +572,7 @@ mod tests {
                 id: "review-1".to_string(),
                 author: Some(Author {
                     login: "bob".to_string(),
+                    actor_type: None,
                 }),
                 body: "looks good".to_string(),
                 created_at: "2025-06-15T00:02:00Z".to_string(),
@@ -566,6 +589,59 @@ mod tests {
         assert_eq!(
             result.open_prs[0].last_comment_at,
             parse_github_timestamp("2025-06-15T00:03:00Z").unwrap()
+        );
+    }
+
+    #[test]
+    fn process_tracked_pull_request_nodes_ignores_bot_comments() {
+        let mut pr = test_pr(1, "OPEN", "2025-06-15T00:00:00Z", Some("SUCCESS"));
+        pr.comments = CommentConnection {
+            nodes: vec![
+                CommentNode {
+                    id: "bot-comment".to_string(),
+                    author: Some(Author {
+                        login: "github-actions".to_string(),
+                        actor_type: Some("Bot".to_string()),
+                    }),
+                    body: "generated output".to_string(),
+                    created_at: "2025-06-15T00:00:00Z".to_string(),
+                    updated_at: "2025-06-15T00:10:00Z".to_string(),
+                },
+                CommentNode {
+                    id: "human-comment".to_string(),
+                    author: Some(Author {
+                        login: "juliehockey30".to_string(),
+                        actor_type: Some("User".to_string()),
+                    }),
+                    body: "real feedback".to_string(),
+                    created_at: "2025-06-15T00:01:00Z".to_string(),
+                    updated_at: "2025-06-15T00:02:00Z".to_string(),
+                },
+            ],
+        };
+        pr.reviews = ReviewConnection {
+            nodes: vec![ReviewNode {
+                id: "bot-review".to_string(),
+                author: Some(Author {
+                    login: "claude".to_string(),
+                    actor_type: Some("Bot".to_string()),
+                }),
+                body: "automated review".to_string(),
+                created_at: "2025-06-15T00:03:00Z".to_string(),
+                updated_at: "2025-06-15T00:11:00Z".to_string(),
+                state: "COMMENTED".to_string(),
+                submitted_at: Some("2025-06-15T00:11:00Z".to_string()),
+            }],
+        };
+
+        let result = process_tracked_pull_request_nodes("owner/repo", &[pr], "alice")
+            .expect("processing succeeds");
+
+        assert_eq!(result.all_comments.len(), 1);
+        assert_eq!(result.all_comments[0].author, "juliehockey30");
+        assert_eq!(
+            result.open_prs[0].last_comment_at,
+            parse_github_timestamp("2025-06-15T00:02:00Z").unwrap()
         );
     }
 
@@ -592,6 +668,7 @@ mod tests {
                 submitted_at: Some("2025-06-15T00:00:01Z".to_string()),
                 author: Some(Author {
                     login: "alice".to_string(),
+                    actor_type: None,
                 }),
             }],
         };

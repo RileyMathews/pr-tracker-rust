@@ -1,3 +1,5 @@
+use std::cmp::Reverse;
+
 use fuzzy_matcher::{skim::SkimMatcherV2, FuzzyMatcher};
 
 use crate::tui::navigation::AuthorsPane;
@@ -72,7 +74,7 @@ impl State {
                     .map(|score| (score, i, login))
             })
             .collect();
-        scored.sort_by(|a, b| b.0.cmp(&a.0));
+        scored.sort_by_key(|item| Reverse(item.0));
         scored.into_iter().map(|(_, i, login)| (i, login)).collect()
     }
 }

@@ -24,7 +24,7 @@ reviewRequests(first: 100) {
 comments(last: 100) {
   nodes {
     id
-    author { login }
+    author { __typename login }
     body
     createdAt
     updatedAt
@@ -33,7 +33,7 @@ comments(last: 100) {
 reviews(last: 100) {
   nodes {
     id
-    author { login }
+    author { __typename login }
     body
     createdAt
     updatedAt
@@ -102,7 +102,7 @@ commits(last: 1) {{
 comments(last: 100) {{
   nodes {{
     id
-    author {{ login }}
+    author {{ __typename login }}
     body
     createdAt
     updatedAt
@@ -111,7 +111,7 @@ comments(last: 100) {{
 reviews(last: 100) {{
   nodes {{
     id
-    author {{ login }}
+    author {{ __typename login }}
     body
     createdAt
     updatedAt
@@ -200,6 +200,8 @@ pub struct PullRequestNode {
 #[derive(Debug, Deserialize)]
 pub struct Author {
     pub login: String,
+    #[serde(rename = "__typename", default)]
+    pub actor_type: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
